@@ -459,7 +459,7 @@ server <- function(input, output) {
       if (!is.null(input$ct_input$datapath))
         {ct = read.csv(input$ct_input$datapath)
       
-          required_ct = c("Height",
+          required_ct = c("ID","Height",
                       "Skeletal_Muscle_Area",
                       "Subcutaneous_Fat_Area",
                       "Visceral_Fat_Area",
@@ -472,7 +472,9 @@ server <- function(input, output) {
           if(nrow(ct) != nrow(clinpath))
             {
               stop("CSV files must have same number of rows")
-            }
+          }
+          
+          #clinpath = merge(ct, clinpath, by = "ID")
       }
                 
       
@@ -481,6 +483,8 @@ server <- function(input, output) {
     {
       stop("Clinpath CSV must include all the columns:", paste(required_clinpath,collapse = ","))
     }
+    
+    
 
     
 

@@ -1,0 +1,129 @@
+---
+title: "ct-calcs"
+output: html_document
+date: "2025-07-20"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+library(survminer)
+library(survival)
+```
+
+```{r}
+data <- read.csv("C://PhD work//clin path code//body comp dataset.csv")
+```
+
+need to add merge based on ID to lock to clinpath data
+```{r}
+data = data[,c("survstat", "survtime", "ht_first_met", "PRE_SMA_1", "PRE_SUBQ_1", "PRE_IMA_1", "PRE_VAT_1")]
+```
+
+```{r}
+data$subq_ht <- data$PRE_SUBQ_1 /(data$ht_first_met)^2
+data$vat_ht <- data$PRE_VAT_1 / (data$ht_first_met)^2
+data$sma_ht <- data$PRE_SMA_1 / (data$ht_first_met)^2
+data$SMD <- data$PRE_SMA_1 / data$PRE_IMA_1  
+
+glm <- glm(survstat ~ vat_ht + sma_ht + subq_ht, data = data, family = binomial)
+summary(glm)
+```
+
+why do we not run GLM on the BCHI formula, why only on DMAI
+```{r}
+data$DMAI = glm[[1]][1] + glm[[1]][2]*data$vat_ht + glm[[1]][3]*data$sma_ht + glm[[1]][4]*data$subq_ht
+
+data$BCHI = data$SMD * data$DMAI
+```
+
+```{r}
+res.cut = surv_cutpoint(data, time = "survtime", event = "survstat", variables = c("BCHI"))
+res.cat = surv_categorize(res.cut)
+
+fit = survfit(Surv(survtime, survstat) ~ BCHI, data = res.cat)
+ggsurvplot(fit, data = res.cat, pval = TRUE, risk.table = TRUE)
+```
+
+```{r}
+df<-read.csv("C://PhD work//Melanoma-ClinPath-Model//Datasets//SEER_curated_5years.csv")
+
+df = df[1:5000,]
+required_cols<-c("Age", 
+                 "Mitotic_Rate",
+                 "Breslow_Depth",
+                 "Ulceration",
+                 "Sex",
+                 "FaceHeadNeck",
+                 "UpperLimbShoulder",
+                 "LowerLimbHip",
+                 "Trunk",
+                 "Superficial_Spreading",
+                 "Nodular",
+                 "Lentigo_Maligna",
+                 "Acral_Lentiginous",
+                 "Desmoplastic",
+                 "Melanoma_Specific_Mortality",
+                 "Survival_Months")
+     
+    
+    if (!all(required_cols %in% names(df)))
+    {
+      stop("CSV must include all the columns:", paste(required_cols,collapse = ","))
+    }
+    
+    scale <- readRDS("scaling_data.RData")
+    class_model <- readRDS("classification_model.RData")
+    class<-c()
+    stages<-c()
+    surv_cols = c("Melanoma_Specific_Mortality", "Survival_Months")
+  for (i in 1:nrow(df))
+    {
+      row<-df[i,!(names(df) %in% surv_cols)]
+      pt_data<-data.frame(
+        Age= row$Age,
+        Mitotic_Rate=row$Mitotic_Rate,
+        Breslow_Depth = row$Breslow_Depth,
+        Ulceration = row$Ulceration,
+        Sex = row$Sex,
+        FaceHeadNeck = row$FaceHeadNeck,
+        UpperLimbShoulder =row$UpperLimbShoulder,
+        LowerLimbHip = row$LowerLimbHip,
+        Trunk = row$Trunk,
+        Superficial_Spreading = row$Superficial_Spreading,
+        Nodular = row$Nodular,
+        Lentigo_Maligna = row$Lentigo_Maligna,
+        Acral_Lentiginous = row$Acral_Lentiginous,
+        Desmoplastic = row$Desmoplastic
+        
+      )
+      
+      scaled<-predict(scale,pt_data)
+      
+      pred<-as.character(predict(class_model,scaled))
+      class<-c(class,pred)
+      
+      stage<-ifelse(row$Breslow_Depth<=1,"Stage I","Stage II")
+      stages<-c(stages,stage)
+    }
+
+      df$Risk=class
+      df$Stage=stages
+      df = rename(df, survstat = Melanoma_Specific_Mortality)
+      df = rename(df, survtime = Survival_Months)
+```
+
+survival curves, need to add for BCHI instead of state after, see if that is significant
+```{r}
+fit = survfit(Surv(survtime, survstat) ~ Stage + Risk, data = df)
+ggsurvplot(fit, data = df, pval = TRUE, risk.table = TRUE)
+```
+cox hazards
+```{r}
+res.cox = coxph(Surv(survtime, survstat) ~ Stage + Risk, data = df)
+summary(res.cox)
+```
+

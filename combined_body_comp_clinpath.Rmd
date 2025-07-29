@@ -1,0 +1,270 @@
+---
+title: "body_comp_and_clinpath"
+output: html_document
+date: "2025-07-27"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(caret)
+library(survival)
+library(survminer)
+library(dplyr)
+library(gtsummary)
+library(data.table)
+library(ggplot2)
+library(clusterGeneration)
+library(devtools)
+library(ClusterR)
+library(nnet)
+library(randomForest)
+```
+
+Clinical features 
+```{r}
+#insert cleaned data, need to add patient ID to be able to merge and stratify risk
+data <- read.csv("W:\\SEER_curated_5yearsv3.csv")[,-1]
+```
+
+```{r}
+stage <- function(i, df){
+  bd <- df$Breslow_Depth[[i]]
+  ulc <- df$Ulceration[[i]]
+  if (bd < 0.8){
+    if (ulc == 0){s <- "IA"}
+    if (ulc == 1){s <- "IB"}
+  }
+  if (bd >= 0.8 & bd <= 1){s <- "IB"}
+  if (bd > 1 & bd <= 2){
+    if (ulc == 0){s <- "IB"}
+    if (ulc == 1){s <- "IIA"}
+  }
+  if (bd > 2 & bd <= 4){
+    if (ulc == 0){s <- "IIA"}
+    if (ulc == 1){s <- "IIB"}
+  }
+  if (bd > 4){
+    if (ulc == 0){s <- "IIB"}
+    if (ulc == 1){s <- "IIC"}
+  }
+  return(s)
+}
+
+data$Stage <- unlist(lapply(seq_len(nrow(data)), stage, data))
+```
+
+model determination
+need to do k-fold cross validation here to determine the strongest model
+basically need to do this for k=10 or so, and compare performance across all 5 folds for random forest, xgboost, svm, k nearest neighbors, neural networks and glm
+```{r}
+set.seed(1)
+random_indices = sample(1:nrow(data))
+
+for (i in 0:4){
+  test_rows = data[random_indices[(length(random_indices)/5*(i)+1):(length(random_indices)/5*(i+1))]]
+  test_data = data[test_rows,]
+  train_data = data[-test_rows,]
+}
+
+preProcValues <- preProcess(train_data, method = c("center", "scale"))
+
+train_data = predict(preProcValues, train_data)
+test_data = predict(preProcValues, test_data)
+
+```
+
+ 
+```{r}
+#opt_gmm = Optimal_Clusters_GMM(all.clust, max_clusters = 200, criterion = "BIC", 
+#                               
+#                               dist_mode = "eucl_dist", seed_mode = "random_subset",
+#                               
+#                               km_iter = 10, em_iter = 10, var_floor = 1e-10, 
+#                               
+#                               plot_data = T)
+
+gmm = GMM(train_data, 40, dist_mode = "maha_dist", seed_mode = "random_subset", km_iter = 10,
+          em_iter = 10, verbose = F)   
+pr = predict(gmm, newdata = all.clust)
+
+all.clust$Group <- as.factor(pr)
+#model_tune <- nnet(Group~., data = all.clust, size = 10, decay = 0)
+model_tune <- randomForest(Group~., data = all.clust, mtry = sqrt(ncol(all.clust[,-10])), ntree = 100)
+```
+
+
+CT features
+```{r}
+data <- read.csv("E:\\PhD Research\\PhD work\\EOC-body-comp\\body comp dataset.csv")
+weight = read.csv("E:\\PhD Research\\PhD work\\EOC-body-comp\\EOC body comp weight.csv")
+```
+Weight to BMI
+```{r}
+data = merge(data, weight, by = "MRN")
+data$BMI = data$chemo_start_wgt/data$ht_first_met**2
+```
+
+BMI compared to survival categorical
+```{r}
+for (i in 1:nrow(data)){
+    if (data$BMI[[i]] < 18.5) 
+      {data$BMI_cat[[i]] = "Underweight"}
+    if (data$BMI[[i]] < 25 & data$BMI[[i]]>=18.5) 
+      {data$BMI_cat[[i]] = "Healthy Weight"}
+    if (data$BMI[[i]] < 30 & data$BMI[[i]]>=25) 
+      {data$BMI_cat[[i]] = "Overweight"}
+    if (data$BMI[[i]] < 35 & data$BMI[[i]]>=30) 
+      {data$BMI_cat[[i]] = "Obesity Class I"}
+    if (data$BMI[[i]] < 40 & data$BMI[[i]]>=35) 
+     {data$BMI_cat[[i]] = "Obesity Class II"}
+    if (data$BMI[[i]]>=40) 
+      {data$BMI_cat[[i]] = "Obesity Class III"}
+} 
+
+bmi_tab = data %>%
+  group_by(BMI_cat) %>%
+  summarize(count = n()) 
+bmi_tab = bmi_tab[c(4,2,1,5,3,6),]
+
+
+data$BMI_cat = factor(data$BMI_cat, levels = c("Underweight", "Healthy Weight", "Overweight", "Obesity Class I", "Obesity Class II", "Obesity Class III"))
+fit <- survfit(Surv(survtime, survstat) ~ BMI_cat, data)
+ggsurvplot(fit, data, risk.table = TRUE, conf.int = FALSE, pval = TRUE)
+```
+
+
+```{r}
+res.cut <- surv_cutpoint(data, time = "survtime", event = "survstat",
+   variables = c("BMI"))
+plot(res.cut, "BMI", palette = "npg")
+```
+
+```{r}
+res.cat <- surv_categorize(res.cut)
+logrank <- survdiff(Surv(survtime, survstat) ~ BMI, data = res.cat)
+logrank
+```
+
+```{r}
+fit <- survfit(Surv(survtime, survstat) ~ BMI, res.cat)
+ggsurvplot(fit, risk.table = TRUE, conf.int = FALSE, pval = TRUE)
+```
+
+
+
+CT adipose measurements to indices
+```{r}
+data$subq_ht <- data$PRE_SUBQ_1 /(data$ht_first_met)^2
+data$vat_ht <- data$PRE_VAT_1 / (data$ht_first_met)^2
+data$sma_ht <- data$PRE_SMA_1 / (data$ht_first_met)^2
+  
+glm <- glm(survstat ~ vat_ht + sma_ht + subq_ht, data = data, family = binomial)
+summary(glm)
+```
+
+```{r}
+data$DMAI <- (1.407917 + -0.003635*data$vat_ht + -0.030907*data$sma_ht + 0.003873*data$subq_ht)
+```
+
+```{r}
+res.cut <- surv_cutpoint(data, time = "survtime", event = "survstat",
+   variables = c("DMAI"))
+
+plot(res.cut, "DMAI", palette = "npg")
+```
+
+```{r}
+res.cat <- surv_categorize(res.cut)
+logrank <- survdiff(Surv(survtime, survstat) ~ DMAI, data = res.cat)
+logrank
+```
+
+```{r}
+fit <- survfit(Surv(survtime, survstat) ~ DMAI, data = res.cat)
+ggsurvplot(fit, risk.table = TRUE, conf.int = FALSE, pval = TRUE)
+```
+SMI
+```{r}
+res.cut = surv_cutpoint(data, time="survtime", event = "survstat", variables = c("pre_smi_1"))
+
+plot(res.cut, palette = "npg")
+```
+
+```{r}
+res.cat = surv_categorize(res.cut)
+fit = survfit(Surv(survtime, survstat)~ pre_smi_1, data =res.cat)
+ggsurvplot(fit, res.cat, risk.table = TRUE, conf.int = FALSE, pval = TRUE)
+```
+
+
+PMI
+```{r}
+'''res.cut = surv_cutpoint(data, time="survtime", event = "survstat", variables = c("PMI"))
+
+plot(res.cut, palette = "npg")'''
+```
+
+```{r}
+'''res.cat = surv_categorize(res.cut)
+fit = survfit(Surv(survtime, survstat)~ PMI, data =res.cat)
+ggsurvplot(fit, res.cat, risk.table = TRUE, conf.int = FALSE, pval = TRUE)'''
+```
+
+cox for simple body comp
+```{r}
+res.cox <- coxph(Surv(survtime, survstat) ~ BMI + BMI_cat + pre_smi_1 + DMAI, data =  data)
+summary(res.cox)
+```
+
+
+SMD
+```{r}
+data$SMD <- (data$PRE_SMA_1 / data$PRE_IMA_1)
+```
+
+```{r}
+res.cut <- surv_cutpoint(data, time = "survtime", event = "survstat",
+   variables = c("SMD"))
+
+plot(res.cut, "SMD", palette = "npg")
+```
+
+```{r}
+res.cat <- surv_categorize(res.cut)
+fit <- survfit(Surv(survtime, survstat) ~ SMD, data = res.cat)
+ggsurvplot(fit, risk.table = TRUE, conf.int = FALSE, pval = TRUE)
+```
+
+```{r}
+res.cat <- surv_categorize(res.cut)
+logrank <- survdiff(Surv(survtime, survstat) ~ SMD, data = res.cat)
+logrank
+```
+
+```{r}
+data$BCHI <- data$SMD * data$DMAI
+```
+
+```{r}
+res.cut <- surv_cutpoint(data, time = "survtime", event = "survstat",
+   variables = c("BCHI"))
+
+cutpoint_plot <- plot(res.cut, "BCHI")
+cutpoint_plot
+```
+
+
+```{r}
+res.cat <- surv_categorize(res.cut)
+fit <- survfit(Surv(survtime, survstat) ~ BCHI, data = res.cat)
+ggsurvplot(fit, risk.table = TRUE, conf.int = FALSE, pval = TRUE)
+```
+
+```{r}
+res.cat <- surv_categorize(res.cut)
+logrank <- survdiff(Surv(survtime, survstat) ~ BCHI, data = res.cat)
+logrank
+```

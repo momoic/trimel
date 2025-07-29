@@ -1,0 +1,392 @@
+---
+title: "trimel app test"
+output: html_document
+date: "2025-07-18"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(caret)
+library(shiny)
+library(randomForest)
+library(plotly)
+library(shinythemes)
+library(shinydashboard)
+library(shinycssloaders)
+library(dashboardthemes)
+library(DT)
+library(plotly)
+library(bslib)
+```
+
+
+
+```{r}
+clinpath = "C://PhD work//trimel//clinpath_template.csv"
+ct = "C://PhD work//trimel//ct_parameter_template.csv"
+save(clinpath, file = "clinpath_template.Rdata")
+save(ct, file = "ct_parameter_template.Rdata")
+```
+
+
+```{r}
+
+customTheme <- shinyDashboardThemeDIY(
+    
+    ### general
+    appFontFamily = "Serif"
+    ,appFontColor = "rgb(0,0,0)"
+    ,primaryFontColor = "rgb(0,0,0)"
+    ,infoFontColor = "rgb(0,0,0)"
+    ,successFontColor = "rgb(0,0,0)"
+    ,warningFontColor = "rgb(0,0,0)"
+    ,dangerFontColor = "rgb(0,0,0)"
+    ,bodyBackColor = "rgb(255,255,255)"
+    
+    ### header
+    ,logoBackColor = "#26C6DA"
+    ,headerButtonBackColor = "#26C6DA"
+    ,headerButtonIconColor = "rgb(0,0,0)"
+    ,headerButtonBackColorHover = "rgb(255,255,255)"
+    ,headerButtonIconColorHover = "rgb(0,0,0)"
+    
+    ,headerBackColor = cssGradientThreeColors(
+        direction = "right"
+        ,colorStart = "#26C6DA"
+        ,colorMiddle = "#26C6DA"
+        ,colorEnd = "rgba(255,255,255)"
+        ,colorStartPos = 0
+        ,colorMiddlePos = 90
+        ,colorEndPos = 100
+    )
+    ,headerBoxShadowColor = "black"
+        ,headerBoxShadowSize = "2px 2px 2px"
+    
+    ### sidebar
+    ,sidebarBackColor = cssGradientThreeColors(
+        direction = "down"
+        ,colorStart = "#26C6DA"
+        ,colorMiddle = "#26C6DA"
+        ,colorEnd = "rgba(255,255,255)"
+        ,colorStartPos = 0
+        ,colorMiddlePos = 50
+        ,colorEndPos = 100
+    )
+    ,sidebarPadding = 0
+    
+    ,sidebarMenuBackColor = "transparent"
+    ,sidebarMenuPadding = 0
+    ,sidebarMenuBorderRadius = 0
+    
+    ,sidebarShadowRadius = "3px 5px 5px"
+    ,sidebarShadowColor = "#aaaaaa"
+        
+    ,sidebarUserTextColor = "rgb(255,255,255)"
+    
+    ,sidebarSearchBackColor = "rgb(55,72,80)"
+    ,sidebarSearchIconColor = "rgb(153,153,153)"
+    ,sidebarSearchBorderColor = "#167682"
+    
+    ,sidebarTabTextColor = "rgb(0,0,0)"
+    ,sidebarTabTextSize = 13
+    ,sidebarTabBorderStyle = "none none solid none"
+    ,sidebarTabBorderColor = "#167682"
+    ,sidebarTabBorderWidth = 1
+    
+    ,sidebarTabBackColorSelected = cssGradientThreeColors(
+        direction = "right"
+        ,colorStart = "rgba(250,250,250)"
+        ,colorMiddle = "rgba(250,250,250)"
+        ,colorEnd = "rgba(250,250,250)"
+        ,colorStartPos = 0
+        ,colorMiddlePos = 30
+        ,colorEndPos = 100
+    )
+    ,sidebarTabTextColorSelected = "#167682"
+    ,sidebarTabRadiusSelected = "0px 20px 20px 0px"
+    
+    ,sidebarTabBackColorHover = cssGradientThreeColors(
+        direction = "right"
+        ,colorStart = "#167682"
+        ,colorMiddle = "#167682"
+        ,colorEnd = "#167682"
+        ,colorStartPos = 0
+        ,colorMiddlePos = 80
+        ,colorEndPos = 100
+    )
+    ,sidebarTabTextColorHover = "rgb(255,255,255)"
+    ,sidebarTabBorderStyleHover = "none none solid none"
+    ,sidebarTabBorderColorHover = "rgb(75,126,151)"
+    ,sidebarTabBorderWidthHover = 1
+    ,sidebarTabRadiusHover = "0px 20px 20px 0px"
+    
+    ### boxes
+    ,boxBackColor = "rgb(255,255,255)"
+    ,boxBorderRadius = 5
+    ,boxShadowSize = "0px 1px 1px"
+    ,boxShadowColor = "rgba(0,0,0,.1)"
+    ,boxTitleSize = 16
+    ,boxDefaultColor = "#07272b"
+    ,boxPrimaryColor = "#00CC66"
+    ,boxInfoColor = "rgb(255, 252, 166)"
+    ,boxSuccessColor = cssGradientThreeColors(
+        direction = "right"
+        ,colorStart = "rgba(255,138,122,1)"
+        ,colorMiddle = "rgba(252,110,90,1)"
+        ,colorEnd = "rgba(212,90,70,1)"
+        ,colorStartPos = 0
+        ,colorMiddlePos = 30
+        ,colorEndPos = 100)
+    ,boxWarningColor = "rgb(244,156,104)"
+    ,boxDangerColor = "rgb(255,88,55)"
+    
+    ,tabBoxTabColor = "#00CC66"
+    ,tabBoxTabTextSize = 14
+    ,tabBoxTabTextColor = "rgb(0,0,0)"
+    ,tabBoxTabTextColorSelected = "rgb(0,0,0)"
+    ,tabBoxBackColor = "rgb(212,90,70,1)"
+    ,tabBoxHighlightColor = "rgba(212,90,70,1,1)"
+    ,tabBoxBorderRadius = 5
+    
+    ### inputs
+    ,buttonBackColor = cssGradientThreeColors(
+        direction = "right"
+        ,colorStart = "#00CC66"
+        ,colorMiddle = "#00CC66"
+        ,colorEnd = "#00CC66"
+        ,colorStartPos = 0
+        ,colorMiddlePos = 60
+        ,colorEndPos = 100)
+    ,buttonTextColor = "rgb(250,250,250)"
+    ,buttonBorderColor = "rgb(200,200,200)"
+    ,buttonBorderRadius = 5
+    
+    ,buttonBackColorHover = cssGradientThreeColors(
+        direction = "right"
+        ,colorStart = "rgba(255,255,255)"
+        ,colorMiddle = "rgba(255,255,255)"
+        ,colorEnd = "rgba(255,255,255)"
+        ,colorStartPos = 0
+        ,colorMiddlePos = 60
+        ,colorEndPos = 100
+    )
+    ,buttonTextColorHover = "#00CC66"
+    ,buttonBorderColorHover = "#00CC66"
+    
+    ,textboxBackColor = "rgb(255,255,255)"
+    ,textboxBorderColor = "rgb(200,200,200)"
+    ,textboxBorderRadius = 5
+    ,textboxBackColorSelect = "rgb(245,245,245)"
+    ,textboxBorderColorSelect = "rgb(200,200,200)"
+    
+    ### tables
+    ,tableBackColor = "rgb(255,255,255)"
+    ,tableBorderColor = "rgb(240,240,240)"
+    ,tableBorderTopSize = 1
+    ,tableBorderRowSize = 1
+
+    
+)
+
+customLogo <- shinyDashboardLogoDIY(
+    boldText = "TRIMel"
+    ,mainText = "Tool for Risk Interpretation of Melanomas"
+    ,textSize = 20
+    ,badgeText = "v1.1"
+    ,badgeTextColor = "black"
+        ,badgeTextSize = 1
+    ,badgeBackColor = "#2471A3"
+        ,badgeBorderRadius = 3
+    
+)
+
+
+#UI
+
+# Define UI for application that draws a histogram
+ui <- dashboardPage(
+    
+    dashboardHeader(title = customLogo, 
+                    titleWidth = 500),
+    
+    dashboardSidebar(sidebarMenu(
+        menuItem("TriMel", tabName = "trimel"),
+        menuItem("TriMel_CSV",tabName="trimel_csv"),
+        menuItem("TriMel_CSV including CT paramters", tabName = "trimel_ct")
+        
+    )),
+
+    # Application title
+    #titlePanel("TRIMel: Tool for Risk Interpretation of Melanomas"),
+
+    # Sidebar with a slider input for number of bins 
+    dashboardBody(customTheme,
+                  tabItems(
+                      tabItem(
+                          tabName = "trimel",
+                      #fluidRow(
+                          box(title = "Input Parameters", status = "primary", solidHeader = TRUE, collapsible = TRUE,
+                          sliderInput("breslowdepth", "Breslow Depth (mm)", 0, 10, 0, step = 0.1),
+                          selectInput("sex", "Sex", c("Select","Female", "Male"), selected = NULL),
+                          numericInput("age", "Age", value = 50, min = 0, max = 102),
+                          selectInput("ulceration", "Ulceration Status", c("Select","Absent", "Present"), selected = NULL),
+                          numericInput("mitoticrate", "Mitotic Rate (mitoses / mm2)", value = 0, min = 0),
+                          selectInput("location", "Skin Site", c("Select","Face, Head, or Neck", 
+                                                            "Upper Limb or Shoulder", "Lower Limb or Hip", "Trunk"),
+                                     selected = NULL),
+                          selectInput("subtype", "Histologic Subtype", 
+                                                        c("Select","Unspecified", "Nodular", 
+                                                          "Superficial Spreading", "Acral Lentiginous", 
+                                                          "Lentigo Maligna", "Desmoplastic"),
+                                 selected = NULL),
+                          actionButton("go", "Submit")
+                      ),
+
+                             box(title = "Risk Classification:", status = "primary", solidHeader = TRUE, collapsible = TRUE,
+                                 plotOutput("class_plot")),
+                      
+                      box(title = "Summary:", status = "primary", solidHeader = TRUE, collapsible = TRUE,
+                          textOutput("output_summary"))
+                             
+                      ),
+                    
+                      
+                      tabItem(
+                      tabName="trimel_csv",
+                      box(title = "Input Parameters", status = "primary", solidHeader = TRUE, collapsible = TRUE,
+                          fileInput("file_input","upload CSV file", accept = ".csv"),
+                          downloadButton("download_results","Download risk classification csv"),
+                          br(),
+                          br()
+                          )
+                      
+                      ),
+                      
+                      tabItem(
+                      tabName="trimel_ct",
+                      box(title = "Input Parameters", status = "primary", solidHeader = TRUE, collapsible = TRUE,
+                          fileInput("clinpath_input","upload clinical CSV file", accept = ".csv"),
+                          fileInput("ct_input","upload CT CSV file", accept = ".csv"),
+                          downloadButton("download_results","Download risk classification csv"),
+                          br(),
+                          br()
+                          )
+                      
+                      )
+
+                     # )
+    )
+    )
+    
+)
+  
+server <- function(input, output) {
+    
+    output$download_results<-downloadHandler(
+    filename = function()
+    {
+      paste0("melanoma_risk_output",Sys.Date(),".csv")
+      
+    },
+    
+    content=function(file)
+    {
+    #   req(input$clinpath_input)
+    #   req(input$ct_input)
+    #   clinpath = read.csv(input$clinpath_input$datapath)
+    #   ct = read.csv(input$ct_input$datapath)
+    #   required_clinpath<-c("Age",
+    #                     "Mitotic_Rate",
+    #                     "Breslow_Depth",
+    #                     "Ulceration",
+    #                     "Sex",
+    #                     "FaceHeadNeck",
+    #                     "UpperLimbShoulder",
+    #                     "LowerLimbHip",
+    #                     "Trunk",
+    #                     "Superficial_Spreading",
+    #                     "Nodular",
+    #                     "Lentigo_Maligna",
+    #                     "Acral_Lentiginous",
+    #                     "Desmoplastic")
+    #   
+    #   required_ct = c("Height", 
+    #                   "Skeletal_Muscle_Area", 
+    #                   "Subcutaneous_Fat_Area", 
+    #                   "Visceral_Fat_Area", 
+    #                   "Intramuscular_Fat_Area")
+    #  
+    # 
+    # if (!all(required_clinpath %in% names(clinpath)))
+    # {
+    #   stop("Clinpath CSV must include all the columns:", paste(required_clinpath,collapse = ","))
+    # }
+    # 
+    # if (!all(required_ct %in% names(ct)))
+    # {
+    #   stop("CT CSV must include all the columns:", paste(required_ct,collapse = ","))
+    # }
+    # 
+    # if(nrow(ct) != nrow(clinpath))
+    # {
+    #   stop("CSV files must have same number of rows")
+    # }
+    #   
+    # scale <- readRDS("scaling_data.RData")
+    # class_model <- readRDS("classification_model.RData")
+    # #glm = readRDS("glm_model.RDATA") #need to make this from the data we get from roswell, nashville, and duke
+    # class<-c()
+    # stages<-c()
+    # 
+    # for (i in 1:nrow(clinpath))
+    # {
+    #   row<-clinpath[i, ]
+    #   pt_data<-data.frame(
+    #     Age= row$Age,
+    #     Mitotic_Rate=row$Mitotic_Rate,
+    #     Breslow_Depth = row$Breslow_Depth,
+    #     Ulceration = row$Ulceration,
+    #     Sex = row$Sex,
+    #     FaceHeadNeck = row$FaceHeadNeck,
+    #     UpperLimbShoulder =row$UpperLimbShoulder,
+    #     LowerLimbHip = row$LowerLimbHip,
+    #     Trunk = row$Trunk,
+    #     Superficial_Spreading = row$Superficial_Spreading,
+    #     Nodular = row$Nodular,
+    #     Lentigo_Maligna = row$Lentigo_Maligna,
+    #     Acral_Lentiginous = row$Acral_Lentiginous,
+    #     Desmoplastic = row$Desmoplastic,
+    #     
+    #   )
+    #   
+    #   scaled<-predict(scale,pt_data)
+    #   
+    #   pred<-as.character(predict(class_model,scaled))
+    #   class<-c(class,pred)
+    #   
+    #   stage<-ifelse(row$Breslow_Depth<=1,"Stage I","Stage II")
+    #   stages<-c(stages,stage)
+    # }
+    # 
+    # clinpath$Risk=class
+    # clinpath$Stage=stages
+    # clinpath$Height = ct$Height
+    # clinpath$Skeletal_Muscle_Area = ct$Skeletal_Muscle_Area
+    # clinpath$Subcutaneous_Fat = ct$Subcutaneous_Fat
+    # clinpath$Visceral_Fat = ct$Visceral_Fat
+    # clinpath$Intramuscular_Fat = ct$Intramuscular_Fat
+    # #clinpath$BCHI = (glm[[1]][1] + glm[[1]][2]*ct$Visceral_Fat/ct$Height^2 + glm[[1]][3]*ct$Skeletal_Muscle_Area/ct$Height^2 + glm[[1]][4]*ct$Subcutaneous_Fat/ct$Height^2)*ct$Skeletal_Muscle_area/ct$Intramuscular_Fat
+    # 
+    # 
+    # write.csv(output_df,file,row.names = TRUE)
+    }
+    )
+}
+  
+shinyApp(ui = ui, server = server)
+
+```
+
