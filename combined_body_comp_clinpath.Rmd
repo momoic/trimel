@@ -21,78 +21,106 @@ library(devtools)
 library(ClusterR)
 library(nnet)
 library(randomForest)
+library(e1071)
+library(xgboost)
+library(mclust)
+library(cluster)
 ```
 
 Clinical features 
 ```{r}
 #insert cleaned data, need to add patient ID to be able to merge and stratify risk
-data <- read.csv("W:\\SEER_curated_5yearsv3.csv")[,-1]
+#data <- read.csv("C://PhD work//trimel//barcelona_final.csv")[,-1]
+data <- read.csv("C://PhD work//Melanoma-ClinPath-Model//Datasets//SEER_curated_5years.csv")[1:2000,-1]
+
 ```
 
 ```{r}
-stage <- function(i, df){
-  bd <- df$Breslow_Depth[[i]]
-  ulc <- df$Ulceration[[i]]
-  if (bd < 0.8){
-    if (ulc == 0){s <- "IA"}
-    if (ulc == 1){s <- "IB"}
-  }
-  if (bd >= 0.8 & bd <= 1){s <- "IB"}
-  if (bd > 1 & bd <= 2){
-    if (ulc == 0){s <- "IB"}
-    if (ulc == 1){s <- "IIA"}
-  }
-  if (bd > 2 & bd <= 4){
-    if (ulc == 0){s <- "IIA"}
-    if (ulc == 1){s <- "IIB"}
-  }
-  if (bd > 4){
-    if (ulc == 0){s <- "IIB"}
-    if (ulc == 1){s <- "IIC"}
-  }
-  return(s)
-}
-
-data$Stage <- unlist(lapply(seq_len(nrow(data)), stage, data))
+# stage <- function(i, df){
+#   bd <- df$Breslow_Depth[[i]]
+#   ulc <- df$Ulceration[[i]]
+#   if (bd < 0.8){
+#     if (ulc == 0){s <- "IA"}
+#     if (ulc == 1){s <- "IB"}
+#   }
+#   if (bd >= 0.8 & bd <= 1){s <- "IB"}
+#   if (bd > 1 & bd <= 2){
+#     if (ulc == 0){s <- "IB"}
+#     if (ulc == 1){s <- "IIA"}
+#   }
+#   if (bd > 2 & bd <= 4){
+#     if (ulc == 0){s <- "IIA"}
+#     if (ulc == 1){s <- "IIB"}
+#   }
+#   if (bd > 4){
+#     if (ulc == 0){s <- "IIB"}
+#     if (ulc == 1){s <- "IIC"}
+#   }
+#   return(s)
+# }
+# 
+# data$Stage <- unlist(lapply(seq_len(nrow(data)), stage, data))
 ```
 
 model determination
 need to do k-fold cross validation here to determine the strongest model
-basically need to do this for k=10 or so, and compare performance across all 5 folds for random forest, xgboost, svm, k nearest neighbors, neural networks and glm
+basically need to do this for k=5 or so, and compare performance across all 5 folds for random forest, xgboost, svm, k nearest neighbors, neural networks and glm
 ```{r}
 set.seed(1)
-random_indices = sample(1:nrow(data))
-
-for (i in 0:4){
-  test_rows = data[random_indices[(length(random_indices)/5*(i)+1):(length(random_indices)/5*(i+1))]]
-  test_data = data[test_rows,]
-  train_data = data[-test_rows,]
-}
-
-preProcValues <- preProcess(train_data, method = c("center", "scale"))
-
-train_data = predict(preProcValues, train_data)
-test_data = predict(preProcValues, test_data)
+preProcValues <- preProcess(data, method = c("center", "scale"))
+data = predict(preProcValues, data)
 
 ```
 
+```{r}
+gmm_mclust = Mclust(data, G = 25:50)
+summary(gmm_mclust)
+# cluster_assign = gmm_mclust$classification
+# dist_matrix = dist(data)
+# sil_res = silhouette(cluster_assign, dist_matrix)
+# summary(sil_res)
+```
+ 
  
 ```{r}
-#opt_gmm = Optimal_Clusters_GMM(all.clust, max_clusters = 200, criterion = "BIC", 
-#                               
-#                               dist_mode = "eucl_dist", seed_mode = "random_subset",
-#                               
-#                               km_iter = 10, em_iter = 10, var_floor = 1e-10, 
-#                               
-#                               plot_data = T)
 
-gmm = GMM(train_data, 40, dist_mode = "maha_dist", seed_mode = "random_subset", km_iter = 10,
+opt_gmm = Optimal_Clusters_GMM(data, max_clusters = 50, criterion = "BIC",
+
+                              dist_mode = "eucl_dist", seed_mode = "random_subset",
+
+                              km_iter = 10, em_iter = 5, var_floor = 1e-10,
+
+                              plot_data = T)
+plot(1:50, opt_gmm)
+
+
+gmm = GMM(data, 40, dist_mode = "maha_dist", seed_mode = "random_subset", km_iter = 10,
           em_iter = 10, verbose = F)   
-pr = predict(gmm, newdata = all.clust)
+pr = predict(gmm, newdata = data)
 
-all.clust$Group <- as.factor(pr)
-#model_tune <- nnet(Group~., data = all.clust, size = 10, decay = 0)
-model_tune <- randomForest(Group~., data = all.clust, mtry = sqrt(ncol(all.clust[,-10])), ntree = 100)
+data$Group <- as.factor(pr)
+```
+
+```{r}
+inTraining = createDataPartition(data$Age, p = 0.8, list = FALSE)
+train_data = data[inTraining,]
+testing = data[-inTraining,]
+
+fitControl = trainControl(method = "boot", number = 10, repeats = 10)
+```
+
+
+```{r}
+modelLookup(model = "glmboost")
+
+nn_model = train(Group~., data = train_data, method = "nnet",trControl = fitControl, tuneGrid = expand.grid(.size = c(1,5,10), .decay = 0,0.001,0.1))
+forest_model = train(Group~., data = train_data, method = "rf", trControl = fitControl, tuneGrid = expand.grid(.mtry = sqrt(ncol(train_data[,-10]))))
+svm_model = train(Group~., data = train_data, method = "svmLinearWeights", trControl = fitControl)
+xgb_model = train(Group~., data = train_data, method = "xgbLinear", trControl = fitControl, tuneGrid = expand.grid(.nrounds = 300, .eta = c(0.01, 0.1, 1)))
+knn_model = train(Group~., data = train_data, method = "knn", trControl = fitControl, tuneGrid = expand.grid(k = c(5,10,15,20,25,30,35,40,45,50)))
+glm_model = train(Group~., data = train_data, method = "glm", trControl = fitControl)
+glm_boost_model = train(Group~., data = train_data, method = "glmboost", trControl = fitControl, expand.grid(.mstop = 300, prune = ))
+
 ```
 
 
