@@ -1,0 +1,223 @@
+---
+title: "Untitled"
+output: html_document
+date: "2025-08-13"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(shapviz)
+library(ggplot2)
+library(caret)
+library(survival)
+library(survminer)
+library(dplyr)
+library(gtsummary)
+library(data.table)
+library(clusterGeneration)
+library(devtools)
+library(ClusterR)
+library(nnet)
+library(randomForest)
+library(e1071)
+library(xgboost)
+library(mclust)
+library(cluster)
+library(kernlab)
+library(mboost)
+library(treeshap)
+library(kernelshap)
+library(doFuture)
+```
+data_bmi is not actually adding BMI yet, it's just replacing whatever index is removed inititally
+
+it's not obvious to me that accuracy predicting cluster is that useful, we probably want accuracy predicting risk based on cluster characteristics which probably means we want to use trees to sort into clusters but then calc sig to get the risk and use xgboost to predict risk
+```{r}
+data = read.csv("C://PhD work//Melanoma-ClinPath-Model//Datasets//roswell_final.csv")[,-c(1,8)]
+data_bmi = read.csv("C://PhD work//Melanoma-ClinPath-Model//Datasets//roswell_final.csv")[,-1]
+```
+
+```{r}
+preProcValues <- preProcess(data, method = c("center", "scale"))
+data.ml = predict(preProcValues, data)
+
+preProcValues <- preProcess(data_bmi, method = c("center", "scale"))
+data_bmi.ml = predict(preProcValues, data_bmi)
+```
+
+
+
+```{r}
+
+opt_gmm = Optimal_Clusters_GMM(data.ml, max_clusters = 50, criterion = "BIC",
+
+                              dist_mode = "eucl_dist", seed_mode = "random_subset",
+
+                              km_iter = 10, em_iter = 10, var_floor = 1e-10,
+
+                              plot_data = T)
+plot(1:50, opt_gmm)
+
+
+gmm = GMM(data.ml, 15, dist_mode = "eucl_dist", seed_mode = "random_subset", km_iter = 10,
+          em_iter = 10, verbose = F)   
+gmm_bmi = GMM(data_bmi.ml, 15, dist_mode = "eucl_dist", seed_mode = "random_subset", km_iter = 10,
+          em_iter = 10, verbose = F)   
+
+pr = predict(gmm, newdata = data.ml)
+
+data$Group <- as.factor(pr)
+data.ml$Group = as.factor(pr)
+
+pr = predict(gmm_bmi, newdata = data_bmi.ml)
+data_bmi$Group = as.factor(pr)
+data_bmi.ml$Group = as.factor(pr)
+```
+
+```{r}
+calc_sig <- function(i, data){
+  
+  data$Comparison <- NA
+  data$Comparison[data$Group != i] <- "NC"
+  data$Comparison[data$Group == i] <- "C"
+  if (length(unique(data$Comparison)) > 1){
+  logrank <- survdiff(Surv(Met_Time, Mets) ~ Comparison, data = data)
+  pval <- logrank$pvalue
+  if ((logrank$obs[[1]]/nrow(subset(data, Comparison == "C"))) > (logrank$obs[[2]]/nrow(subset(data, Comparison == "NC")))){
+    risk <- "HR"
+  }
+  if ((logrank$obs[[1]]/nrow(subset(data, Comparison == "C"))) < (logrank$obs[[2]]/nrow(subset(data, Comparison == "NC")))){
+  risk <- "LR"
+  }
+  if ((logrank$obs[[1]]/nrow(subset(data, Comparison == "C"))) == (logrank$obs[[2]]/nrow(subset(data, Comparison == "NC")))){
+  risk <- NA
+  }
+  if (pval < 0.05){
+    sig <- "S"
+  }
+  if (pval >= 0.05){
+  sig <- "NS"
+  }
+  if (logrank$obs[[1]] == 0){
+    z <- 1
+  }
+    if (logrank$obs[[1]] > 0){
+    z <- 0
+  }
+  row <- data.frame("Risk" = risk, "Significance" = sig, "Cluster" = i, "Z" = z)
+  return(row)
+  }
+}
+
+
+data2 <- data.table::rbindlist(lapply(1:15, calc_sig, data))
+data2_bmi = data.table::rbindlist(lapply(1:15,calc_sig,data_bmi))
+```
+
+```{r}
+inTraining = createDataPartition(data.ml$Age, p = 0.8, list = FALSE)
+train_data = data.ml[inTraining,]
+test_data = data.ml[-inTraining,]
+
+inTraining = createDataPartition(data_bmi.ml$Age, p = 0.8, list = FALSE)
+train_data_bmi = data_bmi.ml[inTraining,]
+test_data_bmi = data_bmi.ml[-inTraining,]
+
+fitControl = trainControl(method = "boot", number = 1)
+```
+
+
+```{r}
+set.seed(1)
+#nn_model = train(Group~., data = train_data, method = "nnet",trControl = fitControl, tuneGrid = expand.grid(size = c(1,5,10), decay = c(0,0.001,0.1)))
+#forest_model = train(Group~., data = train_data, method = "rf", trControl = fitControl, tuneGrid = expand.grid(.mtry = c(2:4)))
+#svm_model = train(Group~., data = train_data, method = "lssvmRadial", trControl = fitControl)
+#xgb_model = train(Group~., data = train_data, method = "xgbLinear", trControl = fitControl, tuneGrid = expand.grid(nrounds = 300, eta = c(0.01, 0.1, 1), alpha = c(0, 1, 10), lambda = c(0, 1, 10)))
+#knn_model = train(Group~., data = train_data, method = "knn", trControl = fitControl, tuneGrid = expand.grid(k = c(5,10,15,20,25,30,35,40,45,50)))
+forest_model = randomForest(Group~., data = train_data, mtry = 4, ntree = 500)
+forest_model_bmi = randomForest(Group~., data = train_data_bmi, mtry = 4, ntree = 500)
+```
+
+```{r}
+#nn_pred = predict(nn_model, newdata = test_data)
+forest_pred = predict(forest_model, newdata = test_data)
+#svm_pred = predict(svm_model, newdata = test_data)
+#xgb_pred = predict(xgb_model, newdata = test_data)
+#knn_pred = predict(knn_model, newdata = test_data)
+
+#caret::confusionMatrix(as.factor(nn_pred), as.factor(test_data$Group))
+caret::confusionMatrix(as.factor(forest_pred), as.factor(test_data$Group))
+#caret::confusionMatrix(as.factor(svm_pred), as.factor(test_data$Group))
+#caret::confusionMatrix(as.factor(xgb_pred), as.factor(test_data$Group))
+#caret::confusionMatrix(as.factor(knn_pred), as.factor(test_data$Group))
+
+forest_pred_bmi = predict(forest_model_bmi, newdata = test_data_bmi)
+caret::confusionMatrix(as.factor(forest_pred_bmi), as.factor(test_data_bmi$Group))
+
+```
+
+```{r}
+# options(doFuture.rng.onMisuse = "ignore")
+# registerDoFuture()
+# plan(multisession, workers = 4)
+```
+
+```{r}
+# xvars = colnames(data)
+# xvars.new = colnames(data_bmi)
+# 
+# X = data |>
+#   subset(select = xvars)
+# fit = forest_model
+# shp = permshap(fit, X = data[sample(nrow(X), 100),], bg_X = data[sample(nrow(X), 20),], type = "prob", parallel = TRUE, parallel_args = list(packages = "caret"))
+# shp = kernelshap(fit, X = X,  bg_X = data[sample(nrow(X), 200),], type = "prob", parallel = TRUE)
+# sv = shapviz(shp)
+# sv_importance(sv)
+```
+
+```{r}
+high_risk = subset(data, Group %in% subset(data2, Risk == "HR" & Significance == "S")$Cluster)
+low_risk = subset(data, Group %in% subset(data2, Z == 1)$Cluster)
+at_risk <- setdiff(data, high_risk)
+at_risk <- setdiff(at_risk, low_risk)
+at_risk$Risk = 1
+high_risk$Risk = 2
+low_risk$Risk = 0
+risk_data = rbind(low_risk, at_risk, high_risk)
+
+high_risk = subset(data_bmi, Group %in% subset(data2, Risk == "HR" & Significance == "S")$Cluster)
+low_risk = subset(data_bmi, Group %in% subset(data2, Z == 1)$Cluster)
+at_risk <- setdiff(data_bmi, high_risk)
+at_risk <- setdiff(at_risk, low_risk)
+at_risk$Risk = 1
+high_risk$Risk = 2
+low_risk$Risk = 0
+risk_data_bmi = rbind(low_risk, at_risk, high_risk)
+
+X = risk_data[,-c(18,19)]
+fit = xgb.train(params = list(learning_rate = 0.1), data = xgb.DMatrix(data.matrix(X), label = risk_data$Risk), nrounds =65)
+shp = shapviz(fit, data.matrix(X), X)
+sv_importance(shp, kind = "bee")
+
+X_bmi = risk_data_bmi[,-c(19,20)]
+fit = xgb.train(params = list(learning_rate = 0.1), data = xgb.DMatrix(data.matrix(X_bmi), label = risk_data$Risk), nrounds =65)
+shp = shapviz(fit, data.matrix(X_bmi), X_bmi)
+sv_importance(shp, kind = "bee")
+```
+
+```{r}
+unified = randomForest.unify(forest_model, data)
+unified_bmi = randomForest.unify(forest_model_bmi, data_bmi)
+
+treeshap_res = treeshap(unified, data)
+treeshap_res_bmi = treeshap(unified_bmi, data_bmi)
+
+plot_contribution(treeshap_res, obs = 201)
+plot_feature_importance(treeshap_res, max_vars = 8)
+plot_feature_importance(treeshap_res_bmi, max_vars = 8)
+```
+
+

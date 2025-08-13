@@ -33,9 +33,9 @@ Clinical features
 ```{r}
 #insert cleaned data, need to add patient ID to be able to merge and stratify risk
 #data <- read.csv("C://PhD work//trimel//barcelona_final.csv")[,-1]
-data = read.csv("C://PhD work//Melanoma-ClinPath-Model//Datasets//roswell_final.csv")[,-1]
+#data = read.csv("C://PhD work//Melanoma-ClinPath-Model//Datasets//roswell_final.csv")[,-1]
 #data <- read.csv("C://PhD work//Melanoma-ClinPath-Model//Datasets//SEER_curated_5years.csv")[,-1]
-
+data = read.csv("C://PhD work//trimel//artificial_roswell-EOC.csv")[,-1]
 ```
 
 ```{r}
@@ -69,9 +69,10 @@ model determination
 need to do k-fold cross validation here to determine the strongest model
 basically need to do this for k=5 or so, and compare performance across all 5 folds for random forest, xgboost, svm, k nearest neighbors, neural networks and glm
 ```{r}
+data_clinpath = data[,-c(19:25)]
 set.seed(1)
-preProcValues <- preProcess(data, method = c("center", "scale"))
-data.ml = predict(preProcValues, data)
+preProcValues <- preProcess(data_clinpath, method = c("center", "scale"))
+data.ml = predict(preProcValues, data_clinpath)
 
 ```
 
@@ -87,17 +88,17 @@ data.ml = predict(preProcValues, data)
  
 ```{r}
 
-opt_gmm = Optimal_Clusters_GMM(data.ml, max_clusters = 50, criterion = "BIC",
+# opt_gmm = Optimal_Clusters_GMM(data.ml, max_clusters = 50, criterion = "BIC",
+# 
+#                               dist_mode = "eucl_dist", seed_mode = "random_subset",
+# 
+#                               km_iter = 10, em_iter = 10, var_floor = 1e-10,
+# 
+#                               plot_data = T)
+# plot(1:50, opt_gmm)
 
-                              dist_mode = "eucl_dist", seed_mode = "random_subset",
 
-                              km_iter = 10, em_iter = 10, var_floor = 1e-10,
-
-                              plot_data = T)
-plot(1:50, opt_gmm)
-
-
-gmm = GMM(data.ml, 12, dist_mode = "eucl_dist", seed_mode = "random_subset", km_iter = 10,
+gmm = GMM(data.ml, 14, dist_mode = "eucl_dist", seed_mode = "random_subset", km_iter = 10,
           em_iter = 10, verbose = F)   
 pr = predict(gmm, newdata = data.ml)
 
@@ -148,7 +149,7 @@ calc_sig <- function(i, data){
 }
 
 
-data2 <- data.table::rbindlist(lapply(1:12, calc_sig, data))
+data2 <- data.table::rbindlist(lapply(1:14, calc_sig, data))
 ```
 
 ```{r}
@@ -161,79 +162,108 @@ fitControl = trainControl(method = "boot", number = 1)
 
 
 ```{r}
-nn_model = train(Group~., data = train_data, method = "nnet",trControl = fitControl, tuneGrid = expand.grid(size = c(1,5,10), decay = c(0,0.001,0.1)))
+#nn_model = train(Group~., data = train_data, method = "nnet",trControl = fitControl, tuneGrid = expand.grid(size = c(1,5,10), decay = c(0,0.001,0.1)))
 
-forest_model = train(Group~., data = train_data, method = "rf", trControl = fitControl, tuneGrid = expand.grid(.mtry = sqrt(ncol(train_data[,-10]))))
+#forest_model = train(Group~., data = train_data, method = "rf", trControl = fitControl, tuneGrid = expand.grid(.mtry = sqrt(ncol(train_data[,-10]))))
 svm_model = train(Group~., data = train_data, method = "lssvmRadial", trControl = fitControl)
-xgb_model = train(Group~., data = train_data, method = "xgbLinear", trControl = fitControl, tuneGrid = expand.grid(nrounds = 300, eta = c(0.01, 0.1, 1), alpha = c(0, 1, 10), lambda = c(0, 1, 10)))
-knn_model = train(Group~., data = train_data, method = "knn", trControl = fitControl, tuneGrid = expand.grid(k = c(5,10,15,20,25,30,35,40,45,50)))
-glm_model = train(Group~., data = train_data, method = "glm", trControl = fitControl)
-glmboost_model = train(Group~., data = train_data, method = "glmboost", trControl = fitControl)
+#xgb_model = train(Group~., data = train_data, method = "xgbLinear", trControl = fitControl, tuneGrid = expand.grid(nrounds = 300, eta = c(0.01, 0.1, 1), alpha = c(0, 1, 10), lambda = c(0, 1, 10)))
+#knn_model = train(Group~., data = train_data, method = "knn", trControl = fitControl, tuneGrid = expand.grid(k = c(5,10,15,20,25,30,35,40,45,50)))
 
 ```
 
 ```{r}
-nn_pred = predict(nn_model, newdata = test_data)
-caret::confusionMatrix(as.factor(nn_pred), as.factor(test_data$Group))
+#nn_pred = predict(nn_model, newdata = test_data)
+#forest_pred = predict(forest_model, newdata = test_data)
+svm_pred = predict(svm_model, newdata = test_data)
+#xgb_pred = predict(xgb_model, newdata = test_data)
+#knn_pred = predict(knn_model, newdata = test_data)
+
+#caret::confusionMatrix(as.factor(nn_pred), as.factor(test_data$Group))
+#caret::confusionMatrix(as.factor(forest_pred), as.factor(test_data$Group))
+caret::confusionMatrix(as.factor(svm_pred), as.factor(test_data$Group))
+#caret::confusionMatrix(as.factor(xgb_pred), as.factor(test_data$Group))
+#caret::confusionMatrix(as.factor(knn_pred), as.factor(test_data$Group))
 
 
+```
+radial SVM has good performance for roswell melanoma dataset
+```{r}
+
+high_risk = subset(data, Group %in% subset(data2, Risk == "HR" & Significance == "S")$Cluster)
+low_risk = subset(data, Group %in% subset(data2, Z == 1)$Cluster)
+at_risk <- setdiff(data, high_risk)
+at_risk <- setdiff(at_risk, low_risk)
+at_risk$Risk = "At Risk"
+high_risk$Risk = "High Risk"
+low_risk$Risk = "Low Risk"
+risk_data = rbind(low_risk, at_risk, high_risk)
+```
+
+```{r}
+fit = survfit(Surv(MSS_Time, MSS) ~ Risk, data = risk_data)
+ggsurvplot(fit, risk_data, risk.table = TRUE, conf.int = FALSE, pval = TRUE)
+```
+```{r}
+pairwise_survdiff(Surv(MSS_Time, MSS) ~ Risk, data = risk_data, p.adjust.method = "bonferroni")
 ```
 
 
 CT features
 ```{r}
-data <- read.csv("E:\\PhD Research\\PhD work\\EOC-body-comp\\body comp dataset.csv")
-weight = read.csv("E:\\PhD Research\\PhD work\\EOC-body-comp\\EOC body comp weight.csv")
+#data <- read.csv("C://PhD work//clin path code//body comp dataset.csv")
+weight = read.csv("C://PhD work//clin path code//EOC body comp weight.csv")
 ```
 Weight to BMI
 ```{r}
-data = merge(data, weight, by = "MRN")
-data$BMI = data$chemo_start_wgt/data$ht_first_met**2
+comb_data = merge(risk_data, weight, by = "MRN")
+comb_data$BMI = comb_data$chemo_start_wgt/comb_data$ht_first_met**2
 ```
 
 BMI compared to survival categorical
 ```{r}
-for (i in 1:nrow(data)){
-    if (data$BMI[[i]] < 18.5) 
-      {data$BMI_cat[[i]] = "Underweight"}
-    if (data$BMI[[i]] < 25 & data$BMI[[i]]>=18.5) 
-      {data$BMI_cat[[i]] = "Healthy Weight"}
-    if (data$BMI[[i]] < 30 & data$BMI[[i]]>=25) 
-      {data$BMI_cat[[i]] = "Overweight"}
-    if (data$BMI[[i]] < 35 & data$BMI[[i]]>=30) 
-      {data$BMI_cat[[i]] = "Obesity Class I"}
-    if (data$BMI[[i]] < 40 & data$BMI[[i]]>=35) 
-     {data$BMI_cat[[i]] = "Obesity Class II"}
-    if (data$BMI[[i]]>=40) 
-      {data$BMI_cat[[i]] = "Obesity Class III"}
+for (i in 1:nrow(comb_data)){
+    if (comb_data$BMI[[i]] < 18.5) 
+      {comb_data$BMI_cat[[i]] = "Underweight"}
+    if (comb_data$BMI[[i]] < 25 & comb_data$BMI[[i]]>=18.5) 
+      {comb_data$BMI_cat[[i]] = "Healthy Weight"}
+    if (comb_data$BMI[[i]] < 30 & comb_data$BMI[[i]]>=25) 
+      {comb_data$BMI_cat[[i]] = "Overweight"}
+    if (comb_data$BMI[[i]] < 35 & comb_data$BMI[[i]]>=30) 
+      {comb_data$BMI_cat[[i]] = "Obesity Class I"}
+    if (comb_data$BMI[[i]] < 40 & comb_data$BMI[[i]]>=35) 
+     {comb_data$BMI_cat[[i]] = "Obesity Class II"}
+    if (comb_data$BMI[[i]]>=40) 
+      {comb_data$BMI_cat[[i]] = "Obesity Class III"}
 } 
 
-bmi_tab = data %>%
+bmi_tab = comb_data %>%
   group_by(BMI_cat) %>%
   summarize(count = n()) 
 bmi_tab = bmi_tab[c(4,2,1,5,3,6),]
 
 
-data$BMI_cat = factor(data$BMI_cat, levels = c("Underweight", "Healthy Weight", "Overweight", "Obesity Class I", "Obesity Class II", "Obesity Class III"))
-fit <- survfit(Surv(survtime, survstat) ~ BMI_cat, data)
-ggsurvplot(fit, data, risk.table = TRUE, conf.int = FALSE, pval = TRUE)
+comb_data$BMI_cat = factor(comb_data$BMI_cat, levels = c("Underweight", "Healthy Weight", "Overweight", "Obesity Class I", "Obesity Class II", "Obesity Class III"))
+
+pairwise_survdiff(Surv(MSS_Time, MSS) ~ BMI_cat, data = comb_data, p.adjust.method = "bonferroni")
+fit <- survfit(Surv(MSS_Time, MSS) ~ BMI_cat, data = comb_data)
+ggsurvplot(fit, comb_data, risk.table = TRUE, conf.int = FALSE, pval = TRUE)
 ```
 
 
 ```{r}
-res.cut <- surv_cutpoint(data, time = "survtime", event = "survstat",
+res.cut <- surv_cutpoint(comb_data, time = "MSS_Time", event = "MSS",
    variables = c("BMI"))
 plot(res.cut, "BMI", palette = "npg")
 ```
 
 ```{r}
 res.cat <- surv_categorize(res.cut)
-logrank <- survdiff(Surv(survtime, survstat) ~ BMI, data = res.cat)
+logrank <- survdiff(Surv(MSS_Time, MSS) ~ BMI, data = res.cat)
 logrank
 ```
 
 ```{r}
-fit <- survfit(Surv(survtime, survstat) ~ BMI, res.cat)
+fit <- survfit(Surv(MSS_Time, MSS) ~ BMI, res.cat)
 ggsurvplot(fit, risk.table = TRUE, conf.int = FALSE, pval = TRUE)
 ```
 
@@ -241,20 +271,20 @@ ggsurvplot(fit, risk.table = TRUE, conf.int = FALSE, pval = TRUE)
 
 CT adipose measurements to indices
 ```{r}
-data$subq_ht <- data$PRE_SUBQ_1 /(data$ht_first_met)^2
-data$vat_ht <- data$PRE_VAT_1 / (data$ht_first_met)^2
-data$sma_ht <- data$PRE_SMA_1 / (data$ht_first_met)^2
+comb_data$subq_ht <- comb_data$PRE_SUBQ_1 /(comb_data$ht_first_met)^2
+comb_data$vat_ht <- comb_data$PRE_VAT_1 / (comb_data$ht_first_met)^2
+comb_data$sma_ht <- comb_data$PRE_SMA_1 / (comb_data$ht_first_met)^2
   
-glm <- glm(survstat ~ vat_ht + sma_ht + subq_ht, data = data, family = binomial)
+glm <- glm(MSS ~ vat_ht + sma_ht + subq_ht, data = comb_data, family = binomial)
 summary(glm)
 ```
 
 ```{r}
-data$DMAI <- (1.407917 + -0.003635*data$vat_ht + -0.030907*data$sma_ht + 0.003873*data$subq_ht)
+comb_data$DMAI <- (glm[[1]][[1]] + glm[[1]][[2]]*comb_data$vat_ht + glm[[1]][[3]]*comb_data$sma_ht + glm[[1]][[4]]*comb_data$subq_ht)
 ```
 
 ```{r}
-res.cut <- surv_cutpoint(data, time = "survtime", event = "survstat",
+res.cut <- surv_cutpoint(comb_data, time = "MSS_Time", event = "MSS",
    variables = c("DMAI"))
 
 plot(res.cut, "DMAI", palette = "npg")
@@ -262,55 +292,55 @@ plot(res.cut, "DMAI", palette = "npg")
 
 ```{r}
 res.cat <- surv_categorize(res.cut)
-logrank <- survdiff(Surv(survtime, survstat) ~ DMAI, data = res.cat)
+logrank <- survdiff(Surv(MSS_Time, MSS) ~ DMAI, data = res.cat)
 logrank
 ```
 
 ```{r}
-fit <- survfit(Surv(survtime, survstat) ~ DMAI, data = res.cat)
+fit <- survfit(Surv(MSS_Time, MSS) ~ DMAI, data = res.cat)
 ggsurvplot(fit, risk.table = TRUE, conf.int = FALSE, pval = TRUE)
 ```
 SMI
 ```{r}
-res.cut = surv_cutpoint(data, time="survtime", event = "survstat", variables = c("pre_smi_1"))
+res.cut = surv_cutpoint(comb_data, time="MSS_Time", event = "MSS", variables = c("sma_ht"))
 
 plot(res.cut, palette = "npg")
 ```
 
 ```{r}
 res.cat = surv_categorize(res.cut)
-fit = survfit(Surv(survtime, survstat)~ pre_smi_1, data =res.cat)
+fit = survfit(Surv(MSS_Time, MSS)~ sma_ht, data =res.cat)
 ggsurvplot(fit, res.cat, risk.table = TRUE, conf.int = FALSE, pval = TRUE)
 ```
 
 
 PMI
 ```{r}
-'''res.cut = surv_cutpoint(data, time="survtime", event = "survstat", variables = c("PMI"))
+'''res.cut = surv_cutpoint(comb_data, time="survtime", event = "survstat", variables = c("PMI"))
 
 plot(res.cut, palette = "npg")'''
 ```
 
 ```{r}
 '''res.cat = surv_categorize(res.cut)
-fit = survfit(Surv(survtime, survstat)~ PMI, data =res.cat)
+fit = survfit(Surv(MSS_Time, MSS)~ PMI, data =res.cat)
 ggsurvplot(fit, res.cat, risk.table = TRUE, conf.int = FALSE, pval = TRUE)'''
 ```
 
 cox for simple body comp
 ```{r}
-res.cox <- coxph(Surv(survtime, survstat) ~ BMI + BMI_cat + pre_smi_1 + DMAI, data =  data)
+res.cox <- coxph(Surv(MSS_Time, MSS) ~ BMI + BMI_cat + sma_ht + DMAI, data =  comb_data)
 summary(res.cox)
 ```
 
 
 SMD
 ```{r}
-data$SMD <- (data$PRE_SMA_1 / data$PRE_IMA_1)
+comb_data$SMD <- (comb_data$PRE_SMA_1 / comb_data$PRE_IMA_1)
 ```
 
 ```{r}
-res.cut <- surv_cutpoint(data, time = "survtime", event = "survstat",
+res.cut <- surv_cutpoint(comb_data, time = "MSS_Time", event = "MSS",
    variables = c("SMD"))
 
 plot(res.cut, "SMD", palette = "npg")
@@ -318,23 +348,24 @@ plot(res.cut, "SMD", palette = "npg")
 
 ```{r}
 res.cat <- surv_categorize(res.cut)
-fit <- survfit(Surv(survtime, survstat) ~ SMD, data = res.cat)
+fit <- survfit(Surv(MSS_Time, MSS) ~ SMD, data = res.cat)
 ggsurvplot(fit, risk.table = TRUE, conf.int = FALSE, pval = TRUE)
 ```
 
 ```{r}
 res.cat <- surv_categorize(res.cut)
-logrank <- survdiff(Surv(survtime, survstat) ~ SMD, data = res.cat)
+logrank <- survdiff(Surv(MSS_Time, MSS) ~ SMD, data = res.cat)
 logrank
 ```
 
 ```{r}
-data$BCHI <- data$SMD * data$DMAI
+comb_data$BCHI <- comb_data$SMD * comb_data$DMAI
 ```
 
 ```{r}
-res.cut <- surv_cutpoint(data, time = "survtime", event = "survstat",
+res.cut <- surv_cutpoint(comb_data, time = "MSS_Time", event = "MSS",
    variables = c("BCHI"))
+
 
 cutpoint_plot <- plot(res.cut, "BCHI")
 cutpoint_plot
@@ -343,12 +374,93 @@ cutpoint_plot
 
 ```{r}
 res.cat <- surv_categorize(res.cut)
-fit <- survfit(Surv(survtime, survstat) ~ BCHI, data = res.cat)
+fit <- survfit(Surv(MSS_Time, MSS) ~ BCHI, data = res.cat)
 ggsurvplot(fit, risk.table = TRUE, conf.int = FALSE, pval = TRUE)
 ```
 
 ```{r}
 res.cat <- surv_categorize(res.cut)
-logrank <- survdiff(Surv(survtime, survstat) ~ BCHI, data = res.cat)
+logrank <- survdiff(Surv(MSS_Time, MSS) ~ BCHI, data = res.cat)
 logrank
 ```
+
+```{r}
+comb_data$combined_risk = NA
+comb_data$combined_risk[comb_data$Risk == "Low Risk" & comb_data$BCHI < res.cut[[1]][[4]][[1]]] = "Low-Low"
+comb_data$combined_risk[comb_data$Risk == "At Risk" & comb_data$BCHI < res.cut[[1]][[4]][[1]]] = "Med-Low"
+comb_data$combined_risk[comb_data$Risk == "High Risk" & comb_data$BCHI < res.cut[[1]][[4]][[1]]] = "High-Low"
+comb_data$combined_risk[comb_data$Risk == "Low Risk" & comb_data$BCHI >= res.cut[[1]][[4]][[1]]] = "Low-High"
+comb_data$combined_risk[comb_data$Risk == "At Risk" & comb_data$BCHI >= res.cut[[1]][[4]][[1]]] = "Med-High"
+comb_data$combined_risk[comb_data$Risk == "High Risk" & comb_data$BCHI >= res.cut[[1]][[4]][[1]]] = "High-High"
+
+
+fit = survfit(Surv(MSS_Time, MSS) ~ combined_risk, comb_data)
+ggsurvplot(fit, risk.table = TRUE, conf.int = FALSE, pval = TRUE)
+pairwise_survdiff(Surv(MSS_Time, MSS) ~ combined_risk, data = comb_data, p.adjust.method = "bonferroni")
+```
+retrain on clinpath + BCHI, same number of clusters
+
+```{r}
+data_retrain = comb_data[,c(2:19, 36)]
+set.seed(2)
+
+preProcValues <- preProcess(data_retrain, method = c("center", "scale"))
+data_retrain.ml = predict(preProcValues, data_retrain)
+
+```
+ 
+```{r}
+# 
+# opt_gmm = Optimal_Clusters_GMM(data_retrain.ml, max_clusters = 50, criterion = "BIC",
+# 
+#                               dist_mode = "eucl_dist", seed_mode = "random_subset",
+# 
+#                               km_iter = 10, em_iter = 10, var_floor = 1e-10,
+# 
+#                               plot_data = T)
+# plot(1:50, opt_gmm)
+
+
+gmm = GMM(data_retrain.ml,14, dist_mode = "eucl_dist", seed_mode = "random_subset", km_iter = 10,
+          em_iter = 10, verbose = F)   
+pr = predict(gmm, newdata = data_retrain.ml)
+
+data_retrain$Group <- as.factor(pr)
+data_retrain.ml$Group = as.factor(pr)
+
+same = 0
+not = 0
+for (i in 1:nrow(data_retrain)){
+  if(data_retrain$Group[i] == data$Group[i]){
+    same = same + 1
+  }
+  else{
+    not = not+1
+  }
+}
+data.frame(same,not)
+
+data_retrain2 <- data.table::rbindlist(lapply(1:14, calc_sig, data_retrain))
+
+```
+
+```{r}
+
+high_risk = subset(data_retrain, Group %in% subset(data_retrain2, Risk == "HR" & Significance == "S")$Cluster)
+low_risk = subset(data_retrain, Group %in% subset(data_retrain2, Z == 1)$Cluster)
+at_risk <- setdiff(data_retrain, high_risk)
+at_risk <- setdiff(at_risk, low_risk)
+at_risk$Risk = "At Risk"
+high_risk$Risk = "High Risk"
+low_risk$Risk = "Low Risk"
+risk_data_retrain = rbind(low_risk, at_risk, high_risk)
+```
+
+```{r}
+fit = survfit(Surv(MSS_Time, MSS) ~ Risk, data = risk_data_retrain)
+ggsurvplot(fit, risk_data_retrain, risk.table = TRUE, conf.int = FALSE, pval = TRUE)
+```
+```{r}
+pairwise_survdiff(Surv(MSS_Time, MSS) ~ Risk, data = risk_data_retrain, p.adjust.method = "bonferroni")
+```
+
