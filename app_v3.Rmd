@@ -288,6 +288,22 @@ ui <- dashboardPage(
                           br()
                           )
                       )
+                      ),
+                      tabItem(
+                        tabName="feature_compare",
+                          column(width = 7, 
+                             box(title = "Templates", width = NULL, status = "primary", solidHeader = TRUE, collapsible = TRUE,
+                          downloadButton("clinpath_template", "Download data template csv"),
+                          ),
+                        
+                          box(title = "Dataset", width = NULL, status = "primary", solidHeader = TRUE, collapsible = TRUE,
+                          fileInput("feature_input","upload dataset file with additional features", accept = ".csv"),
+                          
+                          
+                          downloadButton("download_results","Download feature comparison csv"),
+                          br(),
+                          br()
+                          )
                       )
 
                       
