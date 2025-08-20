@@ -125,9 +125,9 @@ opt_gmm = Optimal_Clusters_GMM(data.ml, max_clusters = 50, criterion = "BIC",
 plot(1:50, opt_gmm)
 
 
-gmm = GMM(data.ml, 6, dist_mode = "eucl_dist", seed_mode = "random_subset", km_iter = 10,
+gmm = GMM(data.ml, 25, dist_mode = "eucl_dist", seed_mode = "random_subset", km_iter = 10,
           em_iter = 10, verbose = F)   
-gmm_bmi = GMM(data_bmi.ml, 6, dist_mode = "eucl_dist", seed_mode = "random_subset", km_iter = 10,
+gmm_bmi = GMM(data_bmi.ml, 11, dist_mode = "eucl_dist", seed_mode = "random_subset", km_iter = 10,
           em_iter = 10, verbose = F)   
 
 pr = predict(gmm, newdata = data.ml)
@@ -176,7 +176,7 @@ calc_sig <- function(i, data){
 }
 
 
-data2 <- data.table::rbindlist(lapply(1:14, calc_sig, data))
+data2 <- data.table::rbindlist(lapply(1:25, calc_sig, data))
 ```
 
 ```{r}

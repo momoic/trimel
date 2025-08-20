@@ -172,15 +172,10 @@ forest_model = randomForest(Group~., data = data.ml, mtry = 4, ntree = 500, samp
 
 ```{r}
 risk_class = function(data, cluster_sig){
-  high_risk = subset(data, Group %in% subset(cluster_sig, Risk == "HR" & Significance == "S")$Cluster)
-  low_risk = subset(data, Group %in% subset(cluster_sig, Z == 1)$Cluster)
-  at_risk <- setdiff(data, high_risk)
-  at_risk <- setdiff(at_risk, low_risk)
-  at_risk$Risk = 1
-  high_risk$Risk = 2
-  low_risk$Risk = 0
-  risk_data = rbind(low_risk, at_risk, high_risk)
-  return(risk_data)
+  data$Risk = 1
+  data$Risk[data$Group %in% subset(cluster_sig, Risk == "HR" & Significance == "S")$Cluster] = 2
+  data$Risk[data$Group %in% subset(cluster_sig, Z == 1)$Cluster] = 0
+  return(data)
 }
 ```
 
@@ -196,7 +191,7 @@ sv_importance(shp, kind = "bee")
 
 adding in new dataset and running trained models on it
 ```{r}
-data_new = read.csv("C://PhD work//trimel//artificial_roswell-EOC+BCHI.csv")[,-1]
+data_new = read.csv("C://PhD work//trimel//artificial_roswell-EOC+BCHI.csv")
 data_new = data_new[,colSums(is.na(data_new)) == 0]
 
 preProcValues <- preProcess(data_new, method = c("center", "scale"))

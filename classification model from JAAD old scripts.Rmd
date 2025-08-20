@@ -1,0 +1,972 @@
+---
+title: "classification model"
+author: "sydney grant"
+date: "2023-12-27"
+output: html_document
+---
+
+```{r, warnings = FALSE, echo = FALSE, include=FALSE}
+library(caret)
+library(survival)
+library(survminer)
+library(dplyr)
+library(data.table)
+library(ggplot2)
+library(clusterGeneration)
+library(devtools)
+library(ClusterR)
+library(randomForest)
+```
+
+```{r}
+#data <- read.csv("W:\\SEER_curated_5yearsv3.csv")[,-1]
+#data <- read.csv("F:\\Melanoma ClinPath Model\\SEER_curated_stageI&II.csv")[,-1]
+data <- read.csv("C://PhD work//Melanoma-ClinPath-Model//Final Analysis - JAAD Submission//Datasets//SEER_Final.csv")[,-1]
+#hr <- read.csv("F:\\Thesis\\Chapter 3\\Datasets\\SEER_highrisk.csv")[,-1]
+#hr <- read.csv("F:\\Melanoma-ClinPath-Model\\Datasets\\SEER_curated_highrisk2.csv")[,-1]
+```
+
+Setting scaling factors and scaling SEER data for clustering
+```{r}
+set.seed(1)
+all <- subset(data, Stage == "Localized")
+rownames(all) <- 1:nrow(all)
+#all.clust <- unique(all[,c(1:10)])
+all.clust <- all[,c(1:9)]
+all.save <- all[as.numeric(rownames(all.clust)),]
+
+preProcValues_clust <- preProcess(all.clust, method = c("center", "scale"))
+
+all.clust <- predict(preProcValues_clust, all.clust)
+```
+
+```{r}
+set.seed(2)
+opt_gmm = Optimal_Clusters_GMM(data.ml, max_clusters = 50, criterion = "BIC",
+
+                              dist_mode = "eucl_dist", seed_mode = "random_subset",
+
+                              km_iter = 10, em_iter = 10, var_floor = 1e-10,
+
+                              plot_data = T)
+plot(1:50, opt_gmm)
+gmm_diff = list()
+for (i in 1:(length(opt_gmm)-3)){
+  gmm_diff[i] = abs((opt_gmm[i+3] - opt_gmm[i])/opt_gmm[i])
+}
+gmm = GMM(all.clust, 25, dist_mode = "eucl_dist", seed_mode = "random_subset", km_iter = 10,
+          em_iter = 10, verbose = F)
+#save(gmm, file = "gmm_clustering.Rdata")
+pr = predict(gmm, newdata = all.clust)
+```
+
+```{r}
+set.seed(1)
+all.save$Group <- pr
+
+calc_sig <- function(i, data){
+  data$Comparison <- NA
+  data$Comparison[data$Cluster != i] <- "NC"
+  data$Comparison[data$Cluster == i] <- "C"
+  if (length(unique(data$Comparison)) > 1){
+  logrank <- survdiff(Surv(MSS_Time, MSS) ~ Comparison, data = data)
+  pval <- logrank$pvalue
+  if ((logrank$obs[[1]]/nrow(subset(data, Comparison == "C"))) > (logrank$obs[[2]]/nrow(subset(data, Comparison == "NC")))){
+    risk <- "HR"
+  }
+  if ((logrank$obs[[1]]/nrow(subset(data, Comparison == "C"))) < (logrank$obs[[2]]/nrow(subset(data, Comparison == "NC")))){
+  risk <- "LR"
+  }
+  if ((logrank$obs[[1]]/nrow(subset(data, Comparison == "C"))) == (logrank$obs[[2]]/nrow(subset(data, Comparison == "NC")))){
+  risk <- NA
+  }
+  if (pval < 0.05){
+    sig <- "S"
+  }
+  if (pval >= 0.05){
+  sig <- "NS"
+  }
+  if (logrank$obs[[1]] == 0){
+    z <- 1
+  }
+    if (logrank$obs[[1]] > 0){
+    z <- 0
+  }
+  row <- data.frame("Risk" = risk, "Significance" = sig, "Cluster" = i, "Z" = z)
+  return(row)
+  }
+}
+
+```
+
+```{r}
+#logrank <- survdiff(Surv(MSS_Time, MSS) ~ Cluster, data = subset(all, Breslow_Depth > 1))
+#logrank
+```
+
+
+```{r}
+set.seed(1)
+all$Cluster <- as.factor(pr)
+stage1 <- subset(all, Breslow_Depth <= 1)
+
+data1 <- data.table::rbindlist(lapply(1:25, calc_sig, stage1))
+
+stage2 <- subset(all, Breslow_Depth > 1)
+
+data2 <- data.table::rbindlist(lapply(1:25, calc_sig, stage2))
+
+hr_st1 <- subset(data1, Risk == "HR" & Significance == "S")$Cluster
+lr_st1 <- subset(data1, Risk == "LR" & Significance == "S")$Cluster
+
+hr_st2 <- subset(data2, Risk == "HR" & Significance == "S")$Cluster
+lr_st2 <- subset(data2, Risk == "LR" & Significance == "S")$Cluster
+
+
+all$Risk <- "Moderate-Risk"
+
+
+all$Risk[all$Breslow_Depth <= 1 & all$Cluster %in% lr_st1] <- NA
+all$Risk[all$Breslow_Depth <= 1 & all$Cluster %in% hr_st1] <- NA
+all$Risk[all$Breslow_Depth > 1 & all$Cluster %in% lr_st2] <- NA
+all$Risk[all$Breslow_Depth > 1 & all$Cluster %in% hr_st2] <- NA
+
+all$Risk[all$Breslow_Depth <= 1 & all$Cluster %in% c(12)] <- "High-Risk"
+all$Risk[all$Breslow_Depth <= 1 & all$Cluster %in% c(16)] <- "Low-Risk"
+all$Risk[all$Breslow_Depth > 1 & all$Cluster %in% c(9)] <- "High-Risk"
+all$Risk[all$Breslow_Depth > 1 & all$Cluster %in% c(16)] <- "Low-Risk"
+
+#hr$Risk <- "High-Risk"
+
+#ml_data <- rbind(hr[,-c(15:17)], all[,-c(15:18)])
+ml_data <- all[,-c(15:18)]
+ml_data.surv <- na.omit(all)
+
+ml_data <- na.omit(ml_data)
+```
+
+```{r}
+lr_thin_5yr <- 100*(1 - (nrow(subset(ml_data.surv, Breslow_Depth <= 1 & Risk == "Low-Risk" & MSS == 1 & MSS_Time <= 60))/(nrow(subset(ml_data.surv, Breslow_Depth <= 1 & Risk == "Low-Risk" & MSS_Time >= 60))+nrow(subset(ml_data.surv, Breslow_Depth <= 1 & Risk == "Low-Risk" & MSS == 1 & MSS_Time <= 60)))))
+
+mr_thin_5yr <- 100*(1 - (nrow(subset(ml_data.surv, Breslow_Depth <= 1 & Risk == "Moderate-Risk" & MSS == 1 & MSS_Time <= 60))/(nrow(subset(ml_data.surv, Breslow_Depth <= 1 & Risk == "Moderate-Risk" & MSS_Time >= 60))+nrow(subset(ml_data.surv, Breslow_Depth <= 1 & Risk == "Moderate-Risk" & MSS == 1 & MSS_Time <= 60)))))
+
+hr_thin_5yr <- 100*(1 - (nrow(subset(ml_data.surv, Breslow_Depth <= 1 & Risk == "High-Risk" & MSS == 1 & MSS_Time <= 60))/(nrow(subset(ml_data.surv, Breslow_Depth <= 1 & Risk == "High-Risk" & MSS_Time >= 60))+nrow(subset(ml_data.surv, Breslow_Depth <= 1 & Risk == "High-Risk" & MSS == 1 & MSS_Time <= 60)))))
+
+lr_thick_5yr <- 100*(1 - (nrow(subset(ml_data.surv, Breslow_Depth > 1 & Risk == "Low-Risk" & MSS == 1 & MSS_Time <= 60))/(nrow(subset(ml_data.surv, Breslow_Depth > 1 & Risk == "Low-Risk" & MSS_Time >= 60))+nrow(subset(ml_data.surv, Breslow_Depth > 1 & Risk == "Low-Risk" & MSS == 1 & MSS_Time <= 60)))))
+
+mr_thick_5yr <- 100*(1 - (nrow(subset(ml_data.surv, Breslow_Depth > 1 & Risk == "Moderate-Risk" & MSS == 1 & MSS_Time <= 60))/(nrow(subset(ml_data.surv, Breslow_Depth > 1 & Risk == "Moderate-Risk" & MSS_Time >= 60))+nrow(subset(ml_data.surv, Breslow_Depth > 1 & Risk == "Moderate-Risk" & MSS == 1 & MSS_Time <= 60)))))
+
+hr_thick_5yr <- 100*(1 - (nrow(subset(ml_data.surv, Breslow_Depth > 1 & Risk == "High-Risk" & MSS == 1 & MSS_Time <= 60))/(nrow(subset(ml_data.surv, Breslow_Depth > 1 & Risk == "High-Risk" & MSS_Time >= 60))+nrow(subset(ml_data.surv, Breslow_Depth > 1 & Risk == "High-Risk" & MSS == 1 & MSS_Time <= 60)))))
+```
+
+
+```{r}
+set.seed(1)
+risk <- as.factor(ml_data$Risk)
+preProcValues <- preProcess(ml_data, method = c("center", "scale"))
+ml_breslows <- ml_data$Breslow_Depth
+ml_data <- predict(preProcValues, ml_data)
+```
+
+```{r}
+library(Rtsne)
+
+rownames(ml_data) <- 1:nrow(ml_data)
+unique_ml_data <- unique(ml_data[,-15])
+tsne_res <- Rtsne(unique_ml_data)
+tsne_vals <- as.data.frame(tsne_res$Y)
+colnames(tsne_vals) <- c("tSNE1", "tSNE2")
+tsne_vals$Risk <- risk[as.numeric(rownames(unique_ml_data))]
+tsne_vals$Breslow_Depth <- ml_breslows[as.numeric(rownames(unique_ml_data))]
+```
+
+
+```{r}
+p_tsne <- ggplot(subset(tsne_vals, Breslow_Depth <= 1), aes(x=tSNE1, y=tSNE2, color=Risk))+
+  geom_point(size = 0.1)+
+    theme_bw()+
+  ggtitle("Breslow Depth \u2264 1 mm") +
+  theme(plot.title=element_text(hjust=0.5, family = "serif", size = 14), axis.title = element_text(family = "serif", size = 14), axis.text = element_text(family = "serif", size = 12), legend.key.size = unit(0.1, 'cm'), legend.title = element_text(hjust=0.5, family = "serif", size = 14), legend.text = element_text(family = "serif", size = 12), legend.position = "none") +
+    scale_color_manual(values = c("#ef5350", "#26C6DA", "#00CC66"))
+print(p_tsne)
+```
+
+```{r}
+p_tsne2 <- ggplot(subset(tsne_vals, Breslow_Depth > 1), aes(x=tSNE1, y=tSNE2, color=Risk))+
+  geom_point(size = 0.1)+
+    theme_bw()+
+  ggtitle("Breslow Depth > 1 mm") +
+  theme(plot.title=element_text(hjust=0.5, family = "serif", size = 14), axis.title = element_text(family = "serif", size = 14), axis.text = element_text(family = "serif", size = 12), legend.key.size = unit(0.1, 'cm'), legend.title = element_text(hjust=0.5, family = "serif", size = 14), legend.text = element_text(family = "serif", size = 12), legend.position = "none")+
+    scale_color_manual(values = c("#ef5350", "#26C6DA", "#00CC66"))
+print(p_tsne2)
+```
+```{r}
+logrank <- survdiff(Surv(MSS_Time, MSS) ~ Risk, data = subset(all, Breslow_Depth <= 1 & Risk %in% c("Moderate-Risk", "High-Risk")))
+logrank
+```
+
+
+```{r}
+pval_label.lowvsmod <- expression(paste("Low-Risk vs Moderate-Risk ", italic("p"), " < 0.0001"))
+pval_label.lowvshigh <- expression(paste("Low-Risk vs High-Risk ", italic("p"), " < 0.0001"))
+pval_label.modvshigh <- expression(paste("High-Risk vs Moderate-Risk ", italic("p"), " < 0.0001"))
+```
+
+```{r}
+
+fit.clust <- survfit(Surv(MSS_Time, MSS) ~ Risk, data = subset(ml_data.surv, Breslow_Depth <= 1))
+ml_data.surv$Risk <- factor(ml_data.surv$Risk, levels = c("Low-Risk", "Moderate-Risk", "High-Risk"))
+
+ml_clusts1 <- ggsurvplot(fit = fit.clust, data = subset(ml_data.surv, Breslow_Depth <= 1),censor.size = 2, 
+                             legend.title = "",
+          conf.int = FALSE,       
+          risk.table = TRUE,        
+          risk.table.col = "strata",
+          risk.table.height = 0.3,
+          palette = c("#26C6DA", "#00CC66", "#ef5350"),
+    risk.table.y.text = FALSE,
+          ggtheme = theme_bw())
+
+ml_clusts1$plot <- ml_clusts1$plot +
+  ggtitle("Breslow Depth \u2264 1 mm") +
+    theme_bw()+
+    xlab("Months") +
+    ylab("Survival Probability")+
+  scale_color_manual(values = c("#26C6DA", "#00CC66", "#ef5350")) +
+  annotate(geom="text", x=50, y=0.3, label=pval_label.lowvsmod,
+              color="black", size = 3) +
+    annotate(geom="text", x=50, y=0.2, label=pval_label.lowvshigh,
+              color="black", size = 3) +
+    annotate(geom="text", x=50, y=0.1, label=pval_label.modvshigh,
+              color="black", size = 3) +
+  theme(legend.position = "none", plot.title=element_text(hjust=0.5, family = "serif", size = 14), axis.title = element_text(family = "serif", size = 14), axis.text = element_text(family = "serif", size = 12))
+
+ml_clusts1$table <- ml_clusts1$table +
+    theme(plot.title=element_text(hjust=0.5, family = "serif", size = 14), axis.title = element_text(family = "serif", size = 14), axis.text = element_text(family = "serif", size = 12), legend.position = "none")+
+  scale_color_manual(values = c("#26C6DA", "#00CC66", "#ef5350"))
+
+ggpubr::ggarrange(ml_clusts1$plot, ml_clusts1$table, ncol = 1, nrow = 2, heights = c(2,1))
+
+```
+
+```{r}
+logrank <- survdiff(Surv(MSS_Time, MSS) ~ Risk, data = subset(all, Breslow_Depth > 1 & Risk %in% c("Low-Risk", "Moderate-Risk")))
+logrank
+```
+
+
+```{r}
+pval_label.lowvsmod2 <- expression(paste("Low-Risk vs Moderate-Risk ", italic("p"), " < 0.0001"))
+pval_label.lowvshigh2 <- expression(paste("Low-Risk vs High-Risk ", italic("p"), " < 0.0001"))
+pval_label.modvshigh2 <- expression(paste("High-Risk vs Moderate-Risk ", italic("p"), " < 0.0001"))
+```
+
+```{r}
+
+fit.clust <- survfit(Surv(MSS_Time, MSS) ~ Risk, data = subset(ml_data.surv, Breslow_Depth > 1))
+
+ml_clusts2 <- ggsurvplot(fit = fit.clust, data = subset(ml_data.surv, Breslow_Depth > 1),censor.size = 2, 
+                             legend.title = "",
+          conf.int = FALSE,       
+          risk.table = TRUE,        
+          risk.table.col = "strata",
+          risk.table.height = 0.3, 
+         palette = c("#26C6DA", "#00CC66", "#ef5350"),
+    risk.table.y.text = FALSE,
+          ggtheme = theme_bw())
+
+ml_clusts2$plot <- ml_clusts2$plot +
+  ggtitle("Breslow Depth > 1 mm") +
+    theme_bw()+
+    xlab("Months") +
+    ylab("Survival Probability")+
+  scale_color_manual(values = c("#26C6DA", "#00CC66", "#ef5350")) +
+  annotate(geom="text", x=50, y=0.3, label=pval_label.lowvsmod,
+              color="black", size = 3) +
+    annotate(geom="text", x=50, y=0.2, label=pval_label.lowvshigh,
+              color="black", size = 3) +
+    annotate(geom="text", x=50, y=0.1, label=pval_label.modvshigh,
+              color="black", size = 3) +
+  theme(legend.position = "none", plot.title=element_text(hjust=0.5, family = "serif", size = 14), axis.title = element_text(family = "serif", size = 14), axis.text = element_text(family = "serif", size = 12))
+
+ml_clusts2$table <- ml_clusts2$table +
+    theme(plot.title=element_text(hjust=0.5, family = "serif", size = 14), axis.title = element_text(family = "serif", size = 14), axis.text = element_text(family = "serif", size = 12), legend.position = "none") +
+  scale_color_manual(values = c("#26C6DA", "#00CC66", "#ef5350"))
+
+ggpubr::ggarrange(ml_clusts2$plot, ml_clusts2$table, ncol = 1, nrow = 2, heights = c(2,1))
+
+```
+
+
+
+
+```{r}
+ml_data$Risk <- risk
+```
+
+```{r}
+set.seed(1)
+train <- ml_data[sample(1:nrow(ml_data), 0.8*nrow(ml_data)),]
+test <- ml_data[-sample(1:nrow(ml_data), 0.8*nrow(ml_data)),]
+```
+
+
+```{r}
+rf <- randomForest(Risk~., data = train, mtry = sqrt(ncol(ml_data[,-15])), ntree = 1000)
+preds.prob <- as.data.frame(predict(rf, test, type = "prob"))
+preds.prob$Class <- test$Risk
+preds <- predict(rf, test)
+```
+
+```{r}
+confusionMatrix(test$Risk, preds)
+```
+
+```{r}
+conf_matrix <- as.data.frame(table(test$Risk, preds))
+colnames(conf_matrix) <- c("Actual", "Predicted", "Frequency")
+
+conf_plot <- ggplot(conf_matrix, aes(x = Actual, y = Predicted, fill = Frequency)) +
+  geom_tile() +
+  scale_fill_gradient(high = "#ef5350", low = "white") +
+  theme_bw() +
+      annotate(geom="text", x="High-Risk", y="High-Risk", label="83",
+              color="black", size = 5) +
+        annotate(geom="text", x="High-Risk", y="Moderate-Risk", label="0",
+              color="black", size = 5) +
+        annotate(geom="text", x="High-Risk", y="Low-Risk", label="0",
+              color="black", size = 5) +
+        annotate(geom="text", x="Low-Risk", y="Low-Risk", label="1035",
+              color="black", size = 5) +
+        annotate(geom="text", x="Low-Risk", y="High-Risk", label="0",
+              color="black", size = 5) +
+        annotate(geom="text", x="Low-Risk", y="Moderate-Risk", label="0",
+              color="black", size = 5) +
+        annotate(geom="text", x="Moderate-Risk", y="Moderate-Risk", label="2976",
+              color="black", size = 5) +
+        annotate(geom="text", x="Moderate-Risk", y="High-Risk", label="0",
+              color="black", size = 5) +
+        annotate(geom="text", x="Moderate-Risk", y="Low-Risk", label="0",
+              color="black", size = 5) +
+  theme(legend.position = "none", plot.title=element_text(hjust=0.5, family = "serif", size = 14), axis.title = element_text(family = "serif", size = 14), axis.text = element_text(family = "serif", size = 12))
+```
+
+
+```{r}
+model_tune <- randomForest(Risk~., data = ml_data, mtry = sqrt(ncol(ml_data[,-15])), ntree = 1000)
+```
+
+```{r}
+imp <- as.data.frame(importance(rf))
+imp$Variable <- rownames(imp)
+imp <- imp[order(-imp$MeanDecreaseGini),]
+imp$Variable <- factor(imp$Variable, levels = c(rev(imp$Variable)))
+
+imp_plot <- ggplot(imp, aes(x = MeanDecreaseGini, y = Variable)) +
+  geom_point(color = "black", fill = "black", size = 2, shape = 23) +
+  geom_segment(aes(x=0, xend=MeanDecreaseGini, y=Variable, yend=Variable), color = "black") +
+  theme_bw() +
+  theme(legend.position = "none", plot.title=element_text(hjust=0.5, family = "serif", size = 14), axis.title = element_text(family = "serif", size = 14), axis.text = element_text(family = "serif", size = 12))
+imp_plot
+```
+
+```{r}
+ggarrange(ggpubr::ggarrange(ml_clusts1$plot, ml_clusts1$table, ncol = 1, nrow = 2, heights = c(2,1)), p_tsne, ggpubr::ggarrange(ml_clusts2$plot, ml_clusts2$table, ncol = 1, nrow = 2, heights = c(2,1)), p_tsne2, conf_plot, imp_plot, ncol = 2, nrow = 3, heights = c(1.5, 1.5, 1), labels = c("A", "B", "C", "D", "E", "F"))
+```
+
+
+#########################################################################################
+#########################################################################################
+
+```{r}
+buf <- read.csv("C:\\Users\\15sgr\\Documents\\TRIMel\\Datasets\\roswell_final.csv")
+
+buf.scaled <- predict(preProcValues, buf[,-c(1,16:19)])
+
+preds <-
+  predict(model_tune,buf.scaled)
+
+buf$Risk <- unlist(preds)
+buf$Risk <- factor(buf$Risk, levels = c("Low-Risk", "Moderate-Risk", "High-Risk"))
+```
+
+```{r}
+
+```
+
+
+```{r}
+logrank <- survdiff(Surv(MSS_Time, MSS) ~ Risk, data = subset(buf, Breslow_Depth <= 1 & Risk %in% c("Low-Risk", "High-Risk")))
+logrank
+```
+
+
+```{r}
+pval_label.lowvshigh <- expression(paste("Low-Risk vs High-Risk ", italic("p"), " < 0.0001"))
+pval_label.modvshigh <- expression(paste("High-Risk vs Moderate-Risk ", italic("p"), " < 0.0001"))
+```
+
+```{r}
+
+fit.clust <- survfit(Surv(MSS_Time, MSS) ~ Risk, data = subset(buf, Breslow_Depth <= 1))
+
+buf_mss1 <- ggsurvplot(fit = fit.clust, data = subset(buf, Breslow_Depth <= 1),censor.size = 2, 
+                             legend.title = "",
+          conf.int = FALSE,       
+          risk.table = TRUE,        
+          risk.table.col = "strata",
+          risk.table.height = 0.3, 
+    risk.table.y.text = FALSE,
+    palette = c("#26C6DA", "#167682", "#07272b"),
+    #linetype = c("solid","dotdash", "dotted"),
+          ggtheme = theme_bw())
+
+buf_mss1$plot <- buf_mss1$plot +
+  ggtitle("Breslow Depth \u2264 1 mm") +
+    theme_bw()+
+    xlab("Months") +
+    ylab("Survival Probability")+
+  scale_color_manual(values = c("#26C6DA", "#167682", "#07272b")) +
+    annotate(geom="text", x=50, y=0.2, label=pval_label.lowvshigh,
+              color="black", size = 3) +
+    annotate(geom="text", x=50, y=0.1, label=pval_label.modvshigh,
+              color="black", size = 3) +
+  theme(legend.position = "none", plot.title=element_text(hjust=0.5, family = "serif", size = 14), axis.title = element_text(family = "serif", size = 14), axis.text = element_text(family = "serif", size = 12))+
+  xlim(0,200)
+
+buf_mss1$table <- buf_mss1$table +
+    theme(plot.title=element_text(hjust=0.5, family = "serif", size = 14), axis.title = element_text(family = "serif", size = 14), axis.text = element_text(family = "serif", size = 12), legend.position = "none") +
+  scale_color_manual(values = c("#26C6DA", "#167682", "#07272b"))+
+  xlim(0,200)
+
+buf_mss1.fig <- ggpubr::ggarrange(buf_mss1$plot, buf_mss1$table, ncol = 1, nrow = 2, heights = c(2,1))
+```
+
+```{r}
+logrank <- survdiff(Surv(MSS_Time, MSS) ~ Risk, data = subset(buf, Breslow_Depth > 1 & Risk %in% c("High-Risk", "Low-Risk")))
+logrank
+```
+
+
+```{r}
+
+pval_label.modvshigh <- expression(paste("High-Risk vs Moderate-Risk ", italic("p"), " < 0.01"))
+```
+
+```{r}
+
+fit.clust <- survfit(Surv(MSS_Time, MSS) ~ Risk, data = subset(buf, Breslow_Depth > 1))
+
+buf_mss2 <- ggsurvplot(fit = fit.clust, data = subset(buf, Breslow_Depth > 1),censor.size = 2, 
+                             legend.title = "",
+          conf.int = FALSE,       
+          risk.table = TRUE,        
+          risk.table.col = "strata",
+          risk.table.height = 0.3, 
+    risk.table.y.text = FALSE,
+    palette = c("#26C6DA", "#167682", "#07272b"),
+    #linetype = c("solid","dotdash", "dotted"),
+          ggtheme = theme_bw())
+
+buf_mss2$plot <- buf_mss2$plot +
+  ggtitle("Breslow Depth > 1 mm") +
+    theme_bw()+
+    xlab("Months") +
+    ylab("Survival Probability")+
+  scale_color_manual(values = c("#26C6DA", "#167682", "#07272b")) +
+    annotate(geom="text", x=50, y=0.2, label=pval_label.modvshigh,
+              color="black", size = 3) +
+  theme(legend.position = "none", plot.title=element_text(hjust=0.5, family = "serif", size = 14), axis.title = element_text(family = "serif", size = 14), axis.text = element_text(family = "serif", size = 12))+
+  xlim(0,200)
+
+buf_mss2$table <- buf_mss2$table +
+    theme(plot.title=element_text(hjust=0.5, family = "serif", size = 14), axis.title = element_text(family = "serif", size = 14), axis.text = element_text(family = "serif", size = 12), legend.position = "none") +
+  scale_color_manual(values = c("#26C6DA", "#167682", "#07272b"))+
+  xlim(0,200)
+
+buf_mss2.fig <- ggpubr::ggarrange(buf_mss2$plot, buf_mss2$table, ncol = 1, nrow = 2, heights = c(2,1))
+```
+
+```{r}
+logrank <- survdiff(Surv(Met_Time, Mets) ~ Risk, data = subset(buf, Breslow_Depth > 1 & Risk %in% c("Low-Risk", "Moderate-Risk")))
+logrank
+```
+```{r}
+logrank <- survdiff(Surv(Met_Time, Mets) ~ Risk, data = subset(buf, Breslow_Depth <= 1 & Risk %in% c("High-Risk", "Low-Risk")))
+logrank
+```
+
+
+```{r}
+pval_label.lowvshigh <- expression(paste("Low-Risk vs High-Risk ", italic("p"), " < 0.0001"))
+pval_label.modvshigh <- expression(paste("High-Risk vs Moderate-Risk ", italic("p"), " < 0.0001"))
+```
+
+```{r}
+
+fit.clust <- survfit(Surv(Met_Time, Mets) ~ Risk, data = subset(buf, Breslow_Depth <= 1))
+
+buf_met1 <- ggsurvplot(fit = fit.clust, data = subset(buf, Breslow_Depth <= 1),censor.size = 2, 
+                             legend.title = "",
+          conf.int = FALSE,       
+          risk.table = TRUE,        
+          risk.table.col = "strata",
+          risk.table.height = 0.3, 
+          #linetype = c("solid","dotdash", "dotted"),
+    risk.table.y.text = FALSE,
+    palette = c("#26C6DA", "#167682", "#07272b"),
+          ggtheme = theme_bw())
+
+buf_met1$plot <- buf_met1$plot +
+  ggtitle("Breslow Depth \u2264 1 mm") +
+    theme_bw()+
+    xlab("Months") +
+    ylab("Survival Probability")+
+  scale_color_manual(values = c("#26C6DA", "#167682", "#07272b")) +
+    annotate(geom="text", x=50, y=0.2, label=pval_label.lowvshigh,
+              color="black", size = 3) +
+    annotate(geom="text", x=50, y=0.1, label=pval_label.modvshigh,
+              color="black", size = 3) +
+  theme(legend.position = "none", plot.title=element_text(hjust=0.5, family = "serif", size = 14), axis.title = element_text(family = "serif", size = 14), axis.text = element_text(family = "serif", size = 12))+
+  xlim(0,200)
+
+buf_met1$table <- buf_met1$table +
+    theme(plot.title=element_text(hjust=0.5, family = "serif", size = 14), axis.title = element_text(family = "serif", size = 14), axis.text = element_text(family = "serif", size = 12), legend.position = "none") +
+  scale_color_manual(values = c("#26C6DA", "#167682", "#07272b"))+
+  xlim(0,200)
+
+buf_met1.fig <- ggpubr::ggarrange(buf_met1$plot, buf_met1$table, ncol = 1, nrow = 2, heights = c(2,1))
+```
+
+```{r}
+
+pval_label.modvshigh <- expression(paste("High-Risk vs Moderate-Risk ", italic("p"), " < 0.0001"))
+```
+
+```{r}
+
+fit.clust <- survfit(Surv(Met_Time, Mets) ~ Risk, data = subset(buf, Breslow_Depth > 1))
+
+buf_met2 <- ggsurvplot(fit = fit.clust, data = subset(buf, Breslow_Depth > 1),censor.size = 2, 
+                             legend.title = "",
+          conf.int = FALSE,       
+          risk.table = TRUE,        
+          risk.table.col = "strata",
+          risk.table.height = 0.3, 
+    risk.table.y.text = FALSE,
+    palette = c("#26C6DA", "#167682", "#07272b"),
+    #linetype = c("solid","dotdash", "dotted"),
+          ggtheme = theme_bw())
+
+buf_met2$plot <- buf_met2$plot +
+  ggtitle("Breslow Depth > 1 mm") +
+    theme_bw()+
+    xlab("Months") +
+    ylab("Survival Probability")+
+  scale_color_manual(values = c("#26C6DA", "#167682", "#07272b")) +
+    annotate(geom="text", x=50, y=0.2, label=pval_label.modvshigh,
+              color="black", size = 3) +
+  theme(legend.position = "none", plot.title=element_text(hjust=0.5, family = "serif", size = 14), axis.title = element_text(family = "serif", size = 14), axis.text = element_text(family = "serif", size = 12))+
+  xlim(0,200)
+
+buf_met2$table <- buf_met2$table +
+    theme(plot.title=element_text(hjust=0.5, family = "serif", size = 14), axis.title = element_text(family = "serif", size = 14), axis.text = element_text(family = "serif", size = 12), legend.position = "none") +
+  scale_color_manual(values = c("#26C6DA", "#167682", "#07272b"))+
+  xlim(0,200)
+
+buf_met2.fig <- ggpubr::ggarrange(buf_met2$plot, buf_met2$table, ncol = 1, nrow = 2, heights = c(2,1))
+```
+
+
+
+```{r}
+mel <- read.csv("C:\\Users\\15sgr\\Documents\\TRIMel\\Datasets\\melbourne_final.csv")
+
+mel.scaled <- predict(preProcValues, mel[,-c(1,6,17:19)])
+
+preds <-
+  predict(model_tune,mel.scaled)
+
+mel$Risk <- unlist(preds)
+mel$Risk <- factor(mel$Risk, levels = c("Low-Risk", "Moderate-Risk", "High-Risk"))
+```
+
+```{r}
+logrank <- survdiff(Surv(MSS_Time, MSS) ~ Risk, data = subset(mel, Breslow_Depth <= 1 & Risk %in% c("Low-Risk", "High-Risk")))
+logrank
+```
+
+
+```{r}
+pval_label.lowvshigh <- expression(paste("Low-Risk vs High-Risk ", italic("p"), " < 0.0001"))
+pval_label.modvshigh <- expression(paste("High-Risk vs Moderate-Risk ", italic("p"), " < 0.0001"))
+```
+
+```{r}
+
+fit.clust <- survfit(Surv(MSS_Time, MSS) ~ Risk, data = subset(mel, Breslow_Depth <= 1))
+
+mel_mss1 <- ggsurvplot(fit = fit.clust, data = subset(mel, Breslow_Depth <= 1),censor.size = 2, 
+                             legend.title = "",
+          conf.int = FALSE,       
+          risk.table = TRUE,        
+          risk.table.col = "strata",
+          risk.table.height = 0.3, 
+    risk.table.y.text = FALSE,
+    palette = c("#00CC66", "#007a3d", "#002814"),
+    #linetype = c("solid","dotdash", "dotted"),
+          ggtheme = theme_bw())
+
+mel_mss1$plot <- mel_mss1$plot +
+  ggtitle("Breslow Depth \u2264 1 mm") +
+    theme_bw()+
+    xlab("Months") +
+    ylab("Survival Probability")+
+  scale_color_manual(values = c("#00CC66", "#007a3d", "#002814")) +
+  theme(legend.position = "none", plot.title=element_text(hjust=0.5, family = "serif", size = 14), axis.title = element_text(family = "serif", size = 14), axis.text = element_text(family = "serif", size = 12))+
+  xlim(0,200)
+
+mel_mss1$table <- mel_mss1$table +
+    theme(plot.title=element_text(hjust=0.5, family = "serif", size = 14), axis.title = element_text(family = "serif", size = 14), axis.text = element_text(family = "serif", size = 12), legend.position = "none") +
+  scale_color_manual(values = c("#00CC66", "#007a3d", "#002814"))+
+  xlim(0,200)
+
+mel_mss1.fig <- ggpubr::ggarrange(mel_mss1$plot, mel_mss1$table, ncol = 1, nrow = 2, heights = c(2,1))
+```
+
+```{r}
+logrank <- survdiff(Surv(MSS_Time, MSS) ~ Risk, data = subset(mel, Breslow_Depth > 1 & Risk %in% c("High-Risk", "Low-Risk")))
+logrank
+```
+
+
+```{r}
+pval_label.modvshigh <- expression(paste("High-Risk vs Moderate-Risk ", italic("p"), " < 0.01"))
+```
+
+```{r}
+
+fit.clust <- survfit(Surv(MSS_Time, MSS) ~ Risk, data = subset(mel, Breslow_Depth > 1))
+
+mel_mss2 <- ggsurvplot(fit = fit.clust, data = subset(mel, Breslow_Depth > 1),censor.size = 2, 
+                             legend.title = "",
+          conf.int = FALSE,       
+          risk.table = TRUE,        
+          risk.table.col = "strata",
+          risk.table.height = 0.3, 
+    risk.table.y.text = FALSE,
+    palette = c("#00CC66", "#007a3d", "#002814"),
+    #linetype = c("solid","dotdash", "dotted"),
+          ggtheme = theme_bw())
+
+mel_mss2$plot <- mel_mss2$plot +
+  ggtitle("Breslow Depth > 1 mm") +
+    theme_bw()+
+    xlab("Months") +
+    ylab("Survival Probability")+
+  scale_color_manual(values = c("#00CC66", "#007a3d", "#002814")) +
+    annotate(geom="text", x=50, y=0.1, label=pval_label.modvshigh,
+              color="black", size = 3) +
+  theme(legend.position = "none", plot.title=element_text(hjust=0.5, family = "serif", size = 14), axis.title = element_text(family = "serif", size = 14), axis.text = element_text(family = "serif", size = 12))+
+  xlim(0,200)
+
+mel_mss2$table <- mel_mss2$table +
+    theme(plot.title=element_text(hjust=0.5, family = "serif", size = 14), axis.title = element_text(family = "serif", size = 14), axis.text = element_text(family = "serif", size = 12), legend.position = "none") +
+  scale_color_manual(values = c("#00CC66", "#007a3d", "#002814"))+
+  xlim(0,200)
+
+mel_mss2.fig <- ggpubr::ggarrange(mel_mss2$plot, mel_mss2$table, ncol = 1, nrow = 2, heights = c(2,1))
+```
+
+```{r}
+logrank <- survdiff(Surv(Met_Time, Mets) ~ Risk, data = subset(mel, Breslow_Depth <= 1 & Risk %in% c("High-Risk", "Low-Risk")))
+logrank
+```
+
+
+
+```{r}
+
+fit.clust <- survfit(Surv(Met_Time, Mets) ~ Risk, data = subset(mel, Breslow_Depth <= 1))
+
+mel_met1 <- ggsurvplot(fit = fit.clust, data = subset(mel, Breslow_Depth <= 1),censor.size = 2, 
+                             legend.title = "",
+          conf.int = FALSE,       
+          risk.table = TRUE,        
+          risk.table.col = "strata",
+          risk.table.height = 0.3, 
+    risk.table.y.text = FALSE,
+    palette = c("#00CC66", "#007a3d", "#002814"),
+    #linetype = c("solid","dotdash", "dotted"),
+          ggtheme = theme_bw())
+
+mel_met1$plot <- mel_met1$plot +
+  ggtitle("Breslow Depth \u2264 1 mm") +
+    theme_bw()+
+    xlab("Months") +
+    ylab("Survival Probability")+
+  scale_color_manual(values = c("#00CC66", "#007a3d", "#002814")) +
+  theme(legend.position = "none", plot.title=element_text(hjust=0.5, family = "serif", size = 14), axis.title = element_text(family = "serif", size = 14), axis.text = element_text(family = "serif", size = 12))+
+  xlim(0,200)
+
+mel_met1$table <- mel_met1$table +
+    theme(plot.title=element_text(hjust=0.5, family = "serif", size = 14), axis.title = element_text(family = "serif", size = 14), axis.text = element_text(family = "serif", size = 12), legend.position = "none") +
+  scale_color_manual(values = c("#00CC66", "#007a3d", "#002814"))+
+  xlim(0,200)
+
+mel_met1.fig <- ggpubr::ggarrange(mel_met1$plot, mel_met1$table, ncol = 1, nrow = 2, heights = c(2,1))
+```
+
+```{r}
+logrank <- survdiff(Surv(Met_Time, Mets) ~ Risk, data = subset(mel, Breslow_Depth > 1 & Risk %in% c("Low-Risk", "Moderate-Risk")))
+logrank
+```
+
+
+```{r}
+pval_label.modvshigh <- expression(paste("High-Risk vs Moderate-Risk ", italic("p"), " < 0.01"))
+```
+
+```{r}
+fit.clust <- survfit(Surv(Met_Time, Mets) ~ Risk, data = subset(mel, Breslow_Depth > 1))
+
+mel_met2 <- ggsurvplot(fit = fit.clust, data = subset(mel, Breslow_Depth > 1),censor.size = 2, 
+                             legend.title = "",
+          conf.int = FALSE,       
+          risk.table = TRUE,        
+          risk.table.col = "strata",
+          risk.table.height = 0.3, 
+    risk.table.y.text = FALSE,
+    palette = c("#00CC66", "#007a3d", "#002814"),
+    #linetype = c("solid","dotdash", "dotted"),
+          ggtheme = theme_bw())
+
+mel_met2$plot <- mel_met2$plot +
+  ggtitle("Breslow Depth > 1 mm") +
+    theme_bw()+
+    xlab("Months") +
+    ylab("Survival Probability")+
+  scale_color_manual(values = c("#00CC66", "#007a3d", "#002814")) +
+    annotate(geom="text", x=50, y=0.1, label=pval_label.modvshigh,
+              color="black", size = 3) +
+  theme(legend.position = "none", plot.title=element_text(hjust=0.5, family = "serif", size = 14), axis.title = element_text(family = "serif", size = 14), axis.text = element_text(family = "serif", size = 12))+
+  xlim(0,200)
+
+mel_met2$table <- mel_met2$table +
+    theme(plot.title=element_text(hjust=0.5, family = "serif", size = 14), axis.title = element_text(family = "serif", size = 14), axis.text = element_text(family = "serif", size = 12), legend.position = "none") +
+  scale_color_manual(values = c("#00CC66", "#007a3d", "#002814"))+
+  xlim(0,200)
+
+mel_met2.fig <- ggpubr::ggarrange(mel_met2$plot, mel_met2$table, ncol = 1, nrow = 2, heights = c(2,1))
+```
+
+```{r}
+bar <- read.csv("C:\\Users\\15sgr\\Documents\\TRIMel\\Datasets\\barcelona_final.csv")
+
+bar.scaled <- predict(preProcValues, bar[,-c(1,16:19)])
+
+preds <-
+  predict(model_tune,bar.scaled)
+
+bar$Risk <- unlist(preds)
+bar$Risk <- factor(bar$Risk, levels = c("Low-Risk", "Moderate-Risk", "High-Risk"))
+```
+
+
+```{r}
+
+fit.clust <- survfit(Surv(MSS_Time, MSS) ~ Risk, data = subset(bar, Breslow_Depth <= 1))
+
+bar_mss1 <- ggsurvplot(fit = fit.clust, data = subset(bar, Breslow_Depth <= 1),censor.size = 2, 
+                             legend.title = "",
+          conf.int = FALSE,       
+          risk.table = TRUE,        
+          risk.table.col = "strata",
+          risk.table.height = 0.3, 
+    risk.table.y.text = FALSE,
+    palette = c("#8f3130"),
+    #linetype = c("solid","dotdash", "dotted"),
+          ggtheme = theme_bw())
+
+bar_mss1$plot <- bar_mss1$plot +
+  ggtitle("Breslow Depth \u2264 1 mm") +
+    theme_bw()+
+    xlab("Months") +
+    ylab("Survival Probability")+
+  scale_color_manual(values = c("#8f3130")) +
+  theme(legend.position = "none", plot.title=element_text(hjust=0.5, family = "serif", size = 14), axis.title = element_text(family = "serif", size = 14), axis.text = element_text(family = "serif", size = 12))+
+  xlim(0,200)
+
+bar_mss1$table <- bar_mss1$table +
+    theme(plot.title=element_text(hjust=0.5, family = "serif", size = 14), axis.title = element_text(family = "serif", size = 14), axis.text = element_text(family = "serif", size = 12), legend.position = "none") +
+  scale_color_manual(values = c("#8f3130"))+
+  xlim(0,200)
+
+bar_mss1.fig <- ggpubr::ggarrange(bar_mss1$plot, bar_mss1$table, ncol = 1, nrow = 2, heights = c(2,1))
+```
+
+```{r}
+logrank <- survdiff(Surv(MSS_Time, MSS) ~ Risk, data = subset(bar, Breslow_Depth > 1 & Risk %in% c("Low-Risk", "Moderate-Risk")))
+logrank
+```
+
+
+```{r}
+pval_label.lowvshigh <- expression(paste("High-Risk vs Low-Risk ", italic("p"), " = 0.05"))
+pval_label.modvshigh <- expression(paste("High-Risk vs Moderate-Risk ", italic("p"), " < 0.001"))
+```
+
+```{r}
+
+fit.clust <- survfit(Surv(MSS_Time, MSS) ~ Risk, data = subset(bar, Breslow_Depth > 1))
+
+bar_mss2 <- ggsurvplot(fit = fit.clust, data = subset(bar, Breslow_Depth > 1),censor.size = 2, 
+                             legend.title = "",
+          conf.int = FALSE,       
+          risk.table = TRUE,        
+          risk.table.col = "strata",
+          risk.table.height = 0.3, 
+    risk.table.y.text = FALSE,
+    palette = c("#ef5350", "#8f3130", "#471818"),
+    #linetype = c("solid","dotdash", "dotted"),
+          ggtheme = theme_bw())
+
+bar_mss2$plot <- bar_mss2$plot +
+  ggtitle("Breslow Depth > 1 mm") +
+    theme_bw()+
+    xlab("Months") +
+    ylab("Survival Probability")+
+  scale_color_manual(values = c("#ef5350", "#8f3130", "#471818")) +
+      annotate(geom="text", x=50, y=0.2, label=pval_label.lowvshigh,
+              color="black", size = 3) +
+    annotate(geom="text", x=50, y=0.1, label=pval_label.modvshigh,
+              color="black", size = 3) +
+  theme(legend.position = "none", plot.title=element_text(hjust=0.5, family = "serif", size = 14), axis.title = element_text(family = "serif", size = 14), axis.text = element_text(family = "serif", size = 12))+
+  xlim(0,200)
+
+bar_mss2$table <- bar_mss2$table +
+    theme(plot.title=element_text(hjust=0.5, family = "serif", size = 14), axis.title = element_text(family = "serif", size = 14), axis.text = element_text(family = "serif", size = 12), legend.position = "none") +
+  scale_color_manual(values = c("#ef5350", "#8f3130", "#471818"))+
+  xlim(0,200)
+
+bar_mss2.fig <- ggpubr::ggarrange(bar_mss2$plot, bar_mss2$table, ncol = 1, nrow = 2, heights = c(2,1))
+```
+
+```{r}
+
+fit.clust <- survfit(Surv(Met_Time, Mets) ~ Risk, data = subset(bar, Breslow_Depth <= 1))
+
+bar_met1 <- ggsurvplot(fit = fit.clust, data = subset(bar, Breslow_Depth <= 1),censor.size = 2, 
+                             legend.title = "",
+          conf.int = FALSE,       
+          risk.table = TRUE,        
+          risk.table.col = "strata",
+          risk.table.height = 0.3, 
+    risk.table.y.text = FALSE,
+    palette = c("#8f3130"),
+    #linetype = c("solid","dotdash", "dotted"),
+          ggtheme = theme_bw())
+
+bar_met1$plot <- bar_met1$plot +
+  ggtitle("Breslow Depth \u2264 1 mm") +
+    theme_bw()+
+    xlab("Months") +
+    ylab("Survival Probability")+
+  scale_color_manual(values = c("#8f3130")) +
+  theme(legend.position = "none", plot.title=element_text(hjust=0.5, family = "serif", size = 14), axis.title = element_text(family = "serif", size = 14), axis.text = element_text(family = "serif", size = 12))+
+  xlim(0,200)
+
+bar_met1$table <- bar_met1$table +
+    theme(plot.title=element_text(hjust=0.5, family = "serif", size = 14), axis.title = element_text(family = "serif", size = 14), axis.text = element_text(family = "serif", size = 12), legend.position = "none") +
+  scale_color_manual(values = c("#8f3130"))+
+  xlim(0,200)
+
+bar_met1.fig <- ggpubr::ggarrange(bar_met1$plot, bar_met1$table, ncol = 1, nrow = 2, heights = c(2,1))
+```
+
+```{r}
+logrank <- survdiff(Surv(Met_Time, Mets) ~ Risk, data = subset(bar, Breslow_Depth > 1 & Risk %in% c("High-Risk", "Low-Risk")))
+logrank
+```
+
+
+```{r}
+pval_label.lowvshigh <- expression(paste("High-Risk vs Low-Risk ", italic("p"), " < 0.05"))
+pval_label.modvshigh <- expression(paste("High-Risk vs Moderate-Risk ", italic("p"), " < 0.001"))
+```
+
+```{r}
+
+fit.clust <- survfit(Surv(Met_Time, Mets) ~ Risk, data = subset(bar, Breslow_Depth > 1))
+
+bar_met2 <- ggsurvplot(fit = fit.clust, data = subset(bar, Breslow_Depth > 1),censor.size = 2, 
+                             legend.title = "",
+          conf.int = FALSE,       
+          risk.table = TRUE,        
+          risk.table.col = "strata",
+          risk.table.height = 0.3, 
+    risk.table.y.text = FALSE,
+    palette = c("#ef5350", "#8f3130", "#471818"),
+    #linetype = c("solid","dotdash", "dotted"),
+          ggtheme = theme_bw())
+
+bar_met2$plot <- bar_met2$plot +
+  ggtitle("Breslow Depth > 1 mm") +
+    theme_bw()+
+    xlab("Months") +
+    ylab("Survival Probability")+
+  scale_color_manual(values = c("#ef5350", "#8f3130", "#471818")) +
+      annotate(geom="text", x=50, y=0.2, label=pval_label.lowvshigh,
+              color="black", size = 3) +
+    annotate(geom="text", x=50, y=0.1, label=pval_label.modvshigh,
+              color="black", size = 3) +
+  theme(legend.position = "none", plot.title=element_text(hjust=0.5, family = "serif", size = 14), axis.title = element_text(family = "serif", size = 14), axis.text = element_text(family = "serif", size = 12))+
+  xlim(0,200)
+
+bar_met2$table <- bar_met2$table +
+    theme(plot.title=element_text(hjust=0.5, family = "serif", size = 14), axis.title = element_text(family = "serif", size = 14), axis.text = element_text(family = "serif", size = 12), legend.position = "none") +
+  scale_color_manual(values = c("#ef5350", "#8f3130", "#471818")) +
+  xlim(0,200)
+
+bar_met2.fig <- ggpubr::ggarrange(bar_met2$plot, bar_met2$table, ncol = 1, nrow = 2, heights = c(2,1))
+```
+```{r}
+ggpubr::ggarrange(buf_mss1$plot, buf_mss2$plot, mel_mss1$plot, mel_mss2$plot, bar_mss1$plot, bar_mss2$plot, ncol = 2, nrow = 3, labels = c("A", " ", "B", " ", "C"))
+```
+
+
+```{r}
+ggpubr::ggarrange(buf_met1$plot, buf_met2$plot, mel_met1$plot, mel_met2$plot, bar_met1$plot, bar_met2$plot, ncol = 2, nrow = 3, labels = c("A", " ", "B", " ", "C"))
+```
+
+```{r}
+nrow(subset(buf, Breslow_Depth <= 1 & Risk == "Low-Risk")) + nrow(subset(mel, Breslow_Depth <= 1 & Risk == "Low-Risk")) + nrow(subset(bar, Breslow_Depth <= 1 & Risk == "Low-Risk"))
+```
+
+```{r}
+nrow(subset(buf, Breslow_Depth > 1 & Risk == "Low-Risk")) + nrow(subset(mel, Breslow_Depth > 1 & Risk == "Low-Risk")) + nrow(subset(bar, Breslow_Depth > 1 & Risk == "Low-Risk"))
+```
+
+
+```{r}
+buf_hr_thin_5yr <- 100*(1-(nrow(subset(buf, Breslow_Depth <= 1 & Risk == "High-Risk" & MSS == 1 & MSS_Time <= 60))/((nrow(subset(buf, Breslow_Depth <= 1 & Risk == "High-Risk" & MSS_Time >= 60)))+(nrow(subset(buf, Breslow_Depth <= 1 & Risk == "High-Risk" & MSS == 1 & MSS_Time <= 60))))))
+
+buf_hr_thick_5yr <- 100*(1-(nrow(subset(buf, Breslow_Depth > 1 & Risk == "High-Risk" & MSS == 1 & MSS_Time <= 60))/((nrow(subset(buf, Breslow_Depth > 1 & Risk == "High-Risk" & MSS_Time >= 60)))+(nrow(subset(buf, Breslow_Depth > 1 & Risk == "High-Risk" & MSS == 1 & MSS_Time <= 60))))))
+
+mel_hr_thick_5yr <- 100*(1-(nrow(subset(mel, Breslow_Depth > 1 & Risk == "High-Risk" & MSS == 1 & MSS_Time <= 60))/((nrow(subset(mel, Breslow_Depth > 1 & Risk == "High-Risk" & MSS_Time >= 60)))+(nrow(subset(mel, Breslow_Depth > 1 & Risk == "High-Risk" & MSS == 1 & MSS_Time <= 60))))))
+
+bar_hr_thick_5yr <- 100*(1-(nrow(subset(bar, Breslow_Depth > 1 & Risk == "High-Risk" & MSS == 1 & MSS_Time <= 60))/((nrow(subset(bar, Breslow_Depth > 1 & Risk == "High-Risk" & MSS_Time >= 60)))+(nrow(subset(bar, Breslow_Depth > 1 & Risk == "High-Risk" & MSS == 1 & MSS_Time <= 60))))))
+
+```
+
+
+```{r}
+buf_hr_thin_5yr <- 100*(1-(nrow(subset(buf, Breslow_Depth <= 1 & Risk == "High-Risk" & Mets == 1 & Met_Time <= 60))/((nrow(subset(buf, Breslow_Depth <= 1 & Risk == "High-Risk" & Met_Time >= 60)))+(nrow(subset(buf, Breslow_Depth <= 1 & Risk == "High-Risk" & Mets == 1 & Met_Time <= 60))))))
+
+buf_hr_thick_5yr <- 100*(1-(nrow(subset(buf, Breslow_Depth > 1 & Risk == "High-Risk" & Mets == 1 & Met_Time <= 60))/((nrow(subset(buf, Breslow_Depth > 1 & Risk == "High-Risk" & Met_Time >= 60)))+(nrow(subset(buf, Breslow_Depth > 1 & Risk == "High-Risk" & Mets == 1 & Met_Time <= 60))))))
+
+mel_hr_thick_5yr <- 100*(1-(nrow(subset(mel, Breslow_Depth > 1 & Risk == "High-Risk" & Mets == 1 & Met_Time <= 60))/((nrow(subset(mel, Breslow_Depth > 1 & Risk == "High-Risk" & Met_Time >= 60)))+(nrow(subset(mel, Breslow_Depth > 1 & Risk == "High-Risk" & Mets == 1 & Met_Time <= 60))))))
+
+bar_hr_thick_5yr <- 100*(1-(nrow(subset(bar, Breslow_Depth > 1 & Risk == "High-Risk" & Mets == 1 & Met_Time <= 60))/((nrow(subset(bar, Breslow_Depth > 1 & Risk == "High-Risk" & Met_Time >= 60)))+(nrow(subset(bar, Breslow_Depth > 1 & Risk == "High-Risk" & Mets == 1 & Met_Time <= 60))))))
+
+```

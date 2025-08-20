@@ -25,10 +25,53 @@ library(bslib)
 
 
 ```{r}
-clinpath = "C://PhD work//trimel//clinpath_template.csv"
-ct = "C://PhD work//trimel//ct_parameter_template.csv"
-save(clinpath, file = "clinpath_template.Rdata")
-save(ct, file = "ct_parameter_template.Rdata")
+# clinpath = "C://PhD work//trimel//clinpath_template.csv"
+# ct = "C://PhD work//trimel//ct_parameter_template.csv"
+# save(clinpath, file = "clinpath_template.Rdata")
+# save(ct, file = "ct_parameter_template.Rdata")
+    calc_sig <- function(i, data){
+
+      data$Comparison <- NA
+      data$Comparison[data$Group != i] <- "NC"
+      data$Comparison[data$Group == i] <- "C"
+      if (length(unique(data$Comparison)) > 1){
+      logrank <- survdiff(Surv(Met_Time, Mets) ~ Comparison, data = data)
+      pval <- logrank$pvalue
+      if ((logrank$obs[[1]]/nrow(subset(data, Comparison == "C"))) > (logrank$obs[[2]]/nrow(subset(data, Comparison == "NC")))){
+        risk <- "HR"
+      }
+      if ((logrank$obs[[1]]/nrow(subset(data, Comparison == "C"))) < (logrank$obs[[2]]/nrow(subset(data, Comparison == "NC")))){
+      risk <- "LR"
+      }
+      if ((logrank$obs[[1]]/nrow(subset(data, Comparison == "C"))) == (logrank$obs[[2]]/nrow(subset(data, Comparison == "NC")))){
+      risk <- NA
+      }
+      if (pval < 0.05){
+        sig <- "S"
+      }
+      if (pval >= 0.05){
+      sig <- "NS"
+      }
+      if (logrank$obs[[1]] == 0){
+        z <- 1
+      }
+        if (logrank$obs[[1]] > 0){
+        z <- 0
+      }
+      row <- data.frame("Risk" = risk, "Significance" = sig, "Cluster" = i, "Z" = z)
+      return(row)
+      }
+  }
+
+  risk_class = function(data, cluster_sig){
+  data$Risk = 1
+  data$Risk[data$Group %in% subset(cluster_sig, Risk == "HR" & Significance == "S")$Cluster] = 2
+  data$Risk[data$Group %in% subset(cluster_sig, Z == 1)$Cluster] = 0
+  return(data)
+}
+  save(calc_sig, file = "calc_sig.RData")
+  save(risk_class, file = "risk_class.RData")
+
 ```
 
 
@@ -294,6 +337,10 @@ server <- function(input, output) {
     
     content=function(file)
     {
+      
+      output$clin_ct_plot = renderPlot({
+    ggsurvplot(fit, risk.table = TRUE, conf.int = FALSE, pval = TRUE)
+    })
     #   req(input$clinpath_input)
     #   req(input$ct_input)
     #   clinpath = read.csv(input$clinpath_input$datapath)

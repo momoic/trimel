@@ -32,10 +32,11 @@ library(mboost)
 Clinical features 
 ```{r}
 #insert cleaned data, need to add patient ID to be able to merge and stratify risk
-#data <- read.csv("C://PhD work//trimel//barcelona_final.csv")[,-1]
+data <- read.csv("C://PhD work//trimel//barcelona_final.csv")[,-1]
 #data = read.csv("C://PhD work//Melanoma-ClinPath-Model//Datasets//roswell_final.csv")[,-1]
 #data <- read.csv("C://PhD work//Melanoma-ClinPath-Model//Datasets//SEER_curated_5years.csv")[,-1]
-data = read.csv("C://PhD work//trimel//artificial_roswell-EOC.csv")[,-1]
+#data = read.csv("C://PhD work//trimel//artificial_roswell-EOC.csv")[,-1]
+
 ```
 
 ```{r}
@@ -88,15 +89,19 @@ data.ml = predict(preProcValues, data_clinpath)
  
 ```{r}
 
-# opt_gmm = Optimal_Clusters_GMM(data.ml, max_clusters = 50, criterion = "BIC",
-# 
-#                               dist_mode = "eucl_dist", seed_mode = "random_subset",
-# 
-#                               km_iter = 10, em_iter = 10, var_floor = 1e-10,
-# 
-#                               plot_data = T)
-# plot(1:50, opt_gmm)
+opt_gmm = Optimal_Clusters_GMM(data.ml, max_clusters = 50, criterion = "BIC",
 
+                              dist_mode = "eucl_dist", seed_mode = "random_subset",
+
+                              km_iter = 10, em_iter = 10, var_floor = 1e-10,
+
+                              plot_data = T)
+plot(1:50, opt_gmm)
+
+gmm_diff = list()
+for (i in 1:(length(opt_gmm)-3)){
+  gmm_diff[i] = abs((opt_gmm[i+3] - opt_gmm[i])/opt_gmm[i])
+}
 
 gmm = GMM(data.ml, 14, dist_mode = "eucl_dist", seed_mode = "random_subset", km_iter = 10,
           em_iter = 10, verbose = F)   
@@ -112,7 +117,7 @@ logrank
 ```
 
 
-
+this calc_sig is met free survival
 ```{r}
 calc_sig <- function(i, data){
   
@@ -316,15 +321,15 @@ ggsurvplot(fit, res.cat, risk.table = TRUE, conf.int = FALSE, pval = TRUE)
 
 PMI
 ```{r}
-'''res.cut = surv_cutpoint(comb_data, time="survtime", event = "survstat", variables = c("PMI"))
+#res.cut = surv_cutpoint(comb_data, time="survtime", event = "survstat", variables = c("PMI"))
 
-plot(res.cut, palette = "npg")'''
+#plot(res.cut, palette = "npg")
 ```
 
 ```{r}
-'''res.cat = surv_categorize(res.cut)
-fit = survfit(Surv(MSS_Time, MSS)~ PMI, data =res.cat)
-ggsurvplot(fit, res.cat, risk.table = TRUE, conf.int = FALSE, pval = TRUE)'''
+#res.cat = surv_categorize(res.cut)
+#fit = survfit(Surv(MSS_Time, MSS)~ PMI, data =res.cat)
+#ggsurvplot(fit, res.cat, risk.table = TRUE, conf.int = FALSE, pval = TRUE)
 ```
 
 cox for simple body comp
@@ -386,24 +391,22 @@ logrank
 
 ```{r}
 comb_data$combined_risk = NA
-comb_data$combined_risk[comb_data$Risk == "Low Risk" & comb_data$BCHI < res.cut[[1]][[4]][[1]]] = "Low-Low"
+comb_data$combined_risk[comb_data$Risk == "Low Risk"] = "Low"
 comb_data$combined_risk[comb_data$Risk == "At Risk" & comb_data$BCHI < res.cut[[1]][[4]][[1]]] = "Med-Low"
 comb_data$combined_risk[comb_data$Risk == "High Risk" & comb_data$BCHI < res.cut[[1]][[4]][[1]]] = "High-Low"
-comb_data$combined_risk[comb_data$Risk == "Low Risk" & comb_data$BCHI >= res.cut[[1]][[4]][[1]]] = "Low-High"
 comb_data$combined_risk[comb_data$Risk == "At Risk" & comb_data$BCHI >= res.cut[[1]][[4]][[1]]] = "Med-High"
 comb_data$combined_risk[comb_data$Risk == "High Risk" & comb_data$BCHI >= res.cut[[1]][[4]][[1]]] = "High-High"
 
 
 fit = survfit(Surv(MSS_Time, MSS) ~ combined_risk, comb_data)
 ggsurvplot(fit, risk.table = TRUE, conf.int = FALSE, pval = TRUE)
-pairwise_survdiff(Surv(MSS_Time, MSS) ~ combined_risk, data = comb_data, p.adjust.method = "bonferroni")
+pairwise_survdiff(Surv(MSS_Time, MSS) ~ combined_risk, data = comb_data)
 ```
 retrain on clinpath + BCHI, same number of clusters
 
 ```{r}
 data_retrain = comb_data[,c(2:19, 36)]
 set.seed(2)
-
 preProcValues <- preProcess(data_retrain, method = c("center", "scale"))
 data_retrain.ml = predict(preProcValues, data_retrain)
 
@@ -428,20 +431,8 @@ pr = predict(gmm, newdata = data_retrain.ml)
 data_retrain$Group <- as.factor(pr)
 data_retrain.ml$Group = as.factor(pr)
 
-same = 0
-not = 0
-for (i in 1:nrow(data_retrain)){
-  if(data_retrain$Group[i] == data$Group[i]){
-    same = same + 1
-  }
-  else{
-    not = not+1
-  }
-}
-data.frame(same,not)
-
 data_retrain2 <- data.table::rbindlist(lapply(1:14, calc_sig, data_retrain))
-
+  
 ```
 
 ```{r}
@@ -454,6 +445,22 @@ at_risk$Risk = "At Risk"
 high_risk$Risk = "High Risk"
 low_risk$Risk = "Low Risk"
 risk_data_retrain = rbind(low_risk, at_risk, high_risk)
+
+# risk_data %>%
+#   group_by(Risk) %>%
+#   summarize(n=n())
+# 
+# risk_data_retrain %>%
+#   group_by(Risk) %>%
+#   summarize( n = n())
+# 
+# risk_data %>%
+#   group_by(Mets, Risk) %>%
+#   summarize(n=n())
+# 
+# risk_data_retrain %>%
+#   group_by(Mets, Risk) %>%
+#   summarize(n=n())
 ```
 
 ```{r}
@@ -461,6 +468,6 @@ fit = survfit(Surv(MSS_Time, MSS) ~ Risk, data = risk_data_retrain)
 ggsurvplot(fit, risk_data_retrain, risk.table = TRUE, conf.int = FALSE, pval = TRUE)
 ```
 ```{r}
-pairwise_survdiff(Surv(MSS_Time, MSS) ~ Risk, data = risk_data_retrain, p.adjust.method = "bonferroni")
+pairwise_survdiff(Surv(MSS_Time, MSS) ~ Risk, data = risk_data_retrain, p.adjust.method = "BH")
 ```
 

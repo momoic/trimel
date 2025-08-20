@@ -4,7 +4,7 @@ output: html_document
 date: "2025-06-30"
 ---
 ```{r}
-install.packages(c("knitr","caret","shiny", "randomForest", "plotly", "shinythemes", "shinydashboard", "shinycssloaders", "dashboardthemes", "DT", "plotly"))
+#install.packages(c("knitr","caret","shiny", "randomForest", "plotly", "shinythemes", "shinydashboard", "shinycssloaders", "dashboardthemes", "DT", "plotly"))
 ```
 
 ```{r setup, include=FALSE}
@@ -21,7 +21,13 @@ library(shinydashboard)
 library(shinycssloaders)
 library(dashboardthemes)
 library(DT)
+library(survminer)
+library(survival)
 library(plotly)
+library(shapviz)
+library(ClusterR)
+library(data.table)
+library(xgboost)
 
 customTheme <- shinyDashboardThemeDIY(
     
@@ -204,7 +210,8 @@ ui <- dashboardPage(
     dashboardSidebar(sidebarMenu(
         menuItem("TriMel", tabName = "trimel"),
         menuItem("TriMel_CSV",tabName="trimel_csv"),
-        menuItem("TriMel_CSV with CT", tabName = "trimel_ct")
+        menuItem("TriMel_CSV with CT", tabName = "trimel_ct"),
+        menuItem("Feature Comparison", tabName = "feature_compare")
         
     )),
 
@@ -260,7 +267,7 @@ ui <- dashboardPage(
                       tabName="trimel_csv",
                       box(title = "Input Parameters", status = "primary", solidHeader = TRUE, collapsible = TRUE,
                           fileInput("file_input","upload CSV file", accept = ".csv"),
-                          downloadButton("download_results","Download risk classification csv"),
+                          downloadButton("download_csv","Download risk classification csv"),
                           br(),
                           br()
                           )
@@ -268,8 +275,9 @@ ui <- dashboardPage(
                       ), 
                       tabItem(
                       tabName="trimel_ct",
-                      column(width = 7, 
-                             box(title = "Templates", width = NULL, status = "primary", solidHeader = TRUE, collapsible = TRUE,
+                      fluidRow(
+                        column(width = 3,
+                          box(title = "Templates", width = NULL, status = "primary", solidHeader = TRUE, collapsible = TRUE,
                           downloadButton("clinpath_template", "Download clinpath template csv"),
                           br(),
                           downloadButton("ct_template", "Download CT parameters template csv")
@@ -277,43 +285,52 @@ ui <- dashboardPage(
                       
                       box(title = "Input Parameters", width = NULL, status = "primary", solidHeader = TRUE, collapsible = TRUE,
                           fileInput("clinpath_input","upload clinical CSV file", accept = ".csv"),
+                          
                           checkboxInput("ct", "Include CT Parameters"),
                           conditionalPanel(
                             condition = "input.ct == true",
                             fileInput("ct_input","upload CT CSV file", accept = ".csv")
                           ),
-                          
-                          downloadButton("download_results","Download risk classification csv"),
+                          actionButton("combined_calc", "Calculate"),
                           br(),
-                          br()
-                          )
+                          downloadButton("download_combined","Download risk classification csv"),
+                          br(),
+                          br(),
+                          )),
+                        column(width = 9,
+                        box(title = "Risk Comparison:", status = "primary", solidHeader = TRUE, collapsible = TRUE,
+                                 plotOutput("clin_ct_plot")))
                       )
                       ),
                       tabItem(
                         tabName="feature_compare",
-                          column(width = 7, 
+                          column(width = 3,
                              box(title = "Templates", width = NULL, status = "primary", solidHeader = TRUE, collapsible = TRUE,
-                          downloadButton("clinpath_template", "Download data template csv"),
+                          downloadButton("clinpath_template2", "Download data template csv"),
                           ),
-                        
+
                           box(title = "Dataset", width = NULL, status = "primary", solidHeader = TRUE, collapsible = TRUE,
                           fileInput("feature_input","upload dataset file with additional features", accept = ".csv"),
-                          
-                          
-                          downloadButton("download_results","Download feature comparison csv"),
+                          actionButton("calc_feature", "Calculate")),
                           br(),
-                          br()
-                          )
-                      )
+                          
+                          downloadButton("download_feature","Download feature comparison csv"),
+                          br(),
+                          verbatimTextOutput("confusion1")
+                          ),
+                          column(width = 9,
+                                 box(title = "Feature Comparison", status = "primary", solidHeader = TRUE, collapsible = TRUE,
+                                     plotOutput("feature_num1"), plotOutput("feature_num2")),
+                                 verbatimTextOutput("confusion2")))
+                          
+                      
 
                       
-    )
-    )
+    )))
     
-)
-
 server <- function(input, output) {
-    
+  
+  
     observeEvent(input$go, {
         
         pt_data <- data.frame(
@@ -433,6 +450,20 @@ server <- function(input, output) {
     
   )
   
+  output$clinpath_template2 = downloadHandler(
+    filename = function()
+    {
+      paste0("clinpath_template.csv")
+      
+    },
+    
+    content=function(file){
+      clin_temp = load("clinpath_template.Rdata")
+      write.csv(clin_temp, file)
+    }
+    
+  )
+  
   output$ct_template = downloadHandler(
     filename = function()
     {
@@ -446,19 +477,18 @@ server <- function(input, output) {
     }
     
   )
-  output$download_results<-downloadHandler(
-    filename = function()
-    {
-      paste0("melanoma_risk_output",Sys.Date(),".csv")
-      
-    },
-    
-    content=function(file)
-    {
-      req(input$clinpath_input)
-      clinpath = read.csv(input$clinpath_input$datapath)
-      
-      required_clinpath<-c("Age",
+  
+  clinpath_data = reactiveVal()
+  ct_data = reactiveVal()
+  surv_curve = reactiveVal()
+  feature_data = reactiveVal()
+  fits = reactiveValues()
+  shp_plots = reactiveValues()
+  
+   observeEvent(input$clinpath_input,{
+    req(input$clinpath_input)
+    clinpath = read.csv(input$clinpath_input$datapath)
+    required_clinpath<-c("Age",
                         "Mitotic_Rate",
                         "Breslow_Depth",
                         "Ulceration",
@@ -472,38 +502,51 @@ server <- function(input, output) {
                         "Lentigo_Maligna",
                         "Acral_Lentiginous",
                         "Desmoplastic")
-      if (!is.null(input$ct_input$datapath))
-        {ct = read.csv(input$ct_input$datapath)
-      
-          required_ct = c("ID","Height",
+    if (!all(required_clinpath %in% names(clinpath))){
+        showModal(modalDialog(
+        title = "Clinpath file error",
+        paste0("Clinpath CSV must include all the columns:", paste(required_clinpath,collapse = ", ")),
+        easyClose = TRUE,
+        footer = NULL))
+
+    } else{
+      clinpath_data(clinpath)
+    }
+  })
+  observeEvent(input$ct_input,{
+    ct = read.csv(input$ct_input$datapath)
+    clinpath = clinpath_data()
+    required_ct = c("ID","Height",
                       "Skeletal_Muscle_Area",
                       "Subcutaneous_Fat_Area",
                       "Visceral_Fat_Area",
                       "Intramuscular_Fat_Area")
-          if (!all(required_ct %in% names(ct)))
+    if (!all(required_ct %in% names(ct)))
             {
-              stop("CT CSV must include all the columns:", paste(required_ct,collapse = ","))
+              showModal(modalDialog(
+              title = "CT file error",
+              paste0("CT CSV must include all the columns:", paste(required_ct,collapse = ", ")),
+              easyClose = TRUE,
+              footer = NULL))
             }
         
-          if(nrow(ct) != nrow(clinpath))
+    if(nrow(ct) != nrow(clinpath))
             {
-              stop("CSV files must have same number of rows")
+              showModal(modalDialog(
+              title = "CT file error",
+              paste0("CSV files must have same number of rows"),
+              easyClose = TRUE,
+              footer = NULL))
+    } else{
+          ct_data(ct)
           }
-          
-          #clinpath = merge(ct, clinpath, by = "ID")
-      }
-                
       
-
-    if (!all(required_clinpath %in% names(clinpath)))
-    {
-      stop("Clinpath CSV must include all the columns:", paste(required_clinpath,collapse = ","))
-    }
-    
-    
-
-    
-
+  })
+  calculate = observeEvent(input$combined_calc, {
+    req(input$clinpath_input)
+    withProgress(message = "Calculation in progress", value = 0, {
+      
+    clinpath = clinpath_data()
     scale <- readRDS("scaling_data.RData")
     class_model <- readRDS("classification_model.RData")
     #glm = readRDS("glm_model.RDATA") #need to make this from the data we get from roswell, nashville, and duke
@@ -531,7 +574,9 @@ server <- function(input, output) {
       )
 
       scaled<-predict(scale,pt_data)
-
+      
+      incProgress(1/3)
+      
       pred<-as.character(predict(class_model,scaled))
       class<-c(class,pred)
 
@@ -541,17 +586,250 @@ server <- function(input, output) {
 
     clinpath$Risk=class
     clinpath$Stage=stages
-    if(!is.null(input$ct_input$datapath))
-      {clinpath$Height = ct$Height
-      clinpath$Skeletal_Muscle_Area = ct$Skeletal_Muscle_Area
-      clinpath$Subcutaneous_Fat = ct$Subcutaneous_Fat
-      clinpath$Visceral_Fat = ct$Visceral_Fat
-      clinpath$Intramuscular_Fat = ct$Intramuscular_Fat
-      #clinpath$BCHI = (glm[[1]][1] + glm[[1]][2]*ct$Visceral_Fat/ct$Height^2 + glm[[1]][3]*ct$Skeletal_Muscle_Area/ct$Height^2 +   glm[[1]][4]*ct$Subcutaneous_Fat/ct$Height^2)*ct$Skeletal_Muscle_area/ct$Intramuscular_Fat
-    }
     
+    incProgress(1/3)
+    
+    if(!is.null(input$ct_input$datapath))
+      {
+      ct = ct_data()
+      #clinpath$BCHI = (glm[[1]][1] + glm[[1]][2]*ct$Visceral_Fat/ct$Height^2 + glm[[1]][3]*ct$Skeletal_Muscle_Area/ct$Height^2 +   glm[[1]][4]*ct$Subcutaneous_Fat/ct$Height^2)*ct$Skeletal_Muscle_Area/ct$Intramuscular_Fat
+      clinpath$BCHI = (1 + ct$Visceral_Fat/ct$Height^2 + ct$Skeletal_Muscle_Area/ct$Height^2 + ct$Subcutaneous_Fat/ct$Height^2)*ct$Skeletal_Muscle_Area/ct$Intramuscular_Fat
+      res.cut <- surv_cutpoint(clinpath, time = "MSS_Time", event = "MSS", variables = c("BCHI"))
+      clinpath$combined_risk = NA
+      clinpath$combined_risk[clinpath$Risk == "Low-Risk"] = "Low"
+      clinpath$combined_risk[clinpath$Risk == "Moderate-Risk" & clinpath$BCHI < res.cut[[1]][[4]][[1]]] = "Med-Low"
+      clinpath$combined_risk[clinpath$Risk == "High-Risk" & clinpath$BCHI < res.cut[[1]][[4]][[1]]] = "High-Low"
+      clinpath$combined_risk[clinpath$Risk == "Moderate-Risk" & clinpath$BCHI >= res.cut[[1]][[4]][[1]]] = "Med-High"
+      clinpath$combined_risk[clinpath$Risk == "High-Risk" & clinpath$BCHI >= res.cut[[1]][[4]][[1]]] = "High-High"
+      fit = survfit(Surv(MSS_Time, MSS) ~ combined_risk, clinpath)
+      surv_curve(fit)
+      } else{
+      fit = survfit(Surv(MSS_Time, MSS) ~ Risk, clinpath)
+      surv_curve(fit)
+      }
+    # #pairwise_survdiff(Surv(MSS_Time, MSS) ~ combined_risk, data = clinpath, p.adjust.method = "bonferroni")
+    # 
+    
+    
+    clinpath_data(clinpath)
+    incProgress(1/3)
+    })
+    
+  })
+  
+  output$clin_ct_plot = renderPlot({
+    req(length(surv_curve())>0)
+    survminer::ggsurvplot(fit = surv_curve(), data = clinpath_data(), risk.table = TRUE, conf.int = FALSE, pval = TRUE)
+      })
+  
+  output$download_combined<-downloadHandler(
+    filename = function()
+    {
+      paste0("melanoma_risk_output",Sys.Date(),".csv")
+      
+    },
+    
+    content=function(file)
+    {
+    validate(need(nrow(clinpath_data() > 0, messsage = FALSE)))
+    write.csv(clinpath_data(), file, row.names = TRUE)
+    })
+    
+  observeEvent(input$feature_input, {
+    req(input$feature_input)
+    
+  #   calc_sig <- function(i, data){
+  # 
+  #     data$Comparison <- NA
+  #     data$Comparison[data$Group != i] <- "NC"
+  #     data$Comparison[data$Group == i] <- "C"
+  #     if (length(unique(data$Comparison)) > 1){
+  #     logrank <- survdiff(Surv(Met_Time, Mets) ~ Comparison, data = data)
+  #     pval <- logrank$pvalue
+  #     if ((logrank$obs[[1]]/nrow(subset(data, Comparison == "C"))) > (logrank$obs[[2]]/nrow(subset(data, Comparison == "NC")))){
+  #       risk <- "HR"
+  #     }
+  #     if ((logrank$obs[[1]]/nrow(subset(data, Comparison == "C"))) < (logrank$obs[[2]]/nrow(subset(data, Comparison == "NC")))){
+  #     risk <- "LR"
+  #     }
+  #     if ((logrank$obs[[1]]/nrow(subset(data, Comparison == "C"))) == (logrank$obs[[2]]/nrow(subset(data, Comparison == "NC")))){
+  #     risk <- NA
+  #     }
+  #     if (pval < 0.05){
+  #       sig <- "S"
+  #     }
+  #     if (pval >= 0.05){
+  #     sig <- "NS"
+  #     }
+  #     if (logrank$obs[[1]] == 0){
+  #       z <- 1
+  #     }
+  #       if (logrank$obs[[1]] > 0){
+  #       z <- 0
+  #     }
+  #     row <- data.frame("Risk" = risk, "Significance" = sig, "Cluster" = i, "Z" = z)
+  #     return(row)
+  #     }
+  # }
+  # 
+  # risk_class = function(data, cluster_sig){
+  #     high_risk = subset(data, Group %in% subset(cluster_sig, Risk == "HR" & Significance == "S")$Cluster)
+  #     low_risk = subset(data, Group %in% subset(cluster_sig, Z == 1)$Cluster)
+  #     at_risk <- setdiff(data, high_risk)
+  #     at_risk <- setdiff(at_risk, low_risk)
+  #     at_risk$Risk = 1
+  #     high_risk$Risk = 2
+  #     low_risk$Risk = 0
+  #     risk_data = rbind(low_risk, at_risk, high_risk)
+  #     return(risk_data)
+  # }
+  
+    feature = read.csv(input$feature_input$datapath)
+    required_feature<-c("Age",
+                        "Mitotic_Rate",
+                        "Breslow_Depth",
+                        "Ulceration",
+                        "Sex",
+                        "FaceHeadNeck",
+                        "UpperLimbShoulder",
+                        "LowerLimbHip",
+                        "Trunk",
+                        "Superficial_Spreading",
+                        "Nodular",
+                        "Lentigo_Maligna",
+                        "Acral_Lentiginous",
+                        "Desmoplastic")
+    if (!all(required_feature %in% names(feature))){
+        showModal(modalDialog(
+        title = "Feature file error",
+        paste0("Feature CSV must include at least the columns:", paste(required_feature,collapse = ", ")),
+        easyClose = TRUE,
+        footer = NULL))
 
-    write.csv(clinpath, file, row.names = TRUE)
+    } else{
+      feature_data(feature)
+    }
+  })
+  
+  observeEvent(input$calc_feature, {
+    withProgress(message = "Calculation in progress", value = 0, {
+    scale <- readRDS("scaling_data.RData")
+    class_model <- readRDS("classification_model.RData")
+    class<-c()
+    #stages<-c()
+    feature = feature_data()
+    for (i in 1:nrow(feature))
+    {
+      row<-feature[i, ]
+      pt_data<-data.frame(
+        Age= row$Age,
+        Mitotic_Rate=row$Mitotic_Rate,
+        Breslow_Depth = row$Breslow_Depth,
+        Ulceration = row$Ulceration,
+        Sex = row$Sex,
+        FaceHeadNeck = row$FaceHeadNeck,
+        UpperLimbShoulder =row$UpperLimbShoulder,
+        LowerLimbHip = row$LowerLimbHip,
+        Trunk = row$Trunk,
+        Superficial_Spreading = row$Superficial_Spreading,
+        Nodular = row$Nodular,
+        Lentigo_Maligna = row$Lentigo_Maligna,
+        Acral_Lentiginous = row$Acral_Lentiginous,
+        Desmoplastic = row$Desmoplastic
+      )
+
+      scaled<-predict(scale,pt_data)
+
+      pred<-as.character(predict(class_model,scaled))
+      class<-c(class,pred)
+      
+      setProgress(1/4)
+      # stage<-ifelse(row$Breslow_Depth<=1,"Stage I","Stage II")
+      # stages<-c(stages,stage)
+    }
+
+    #feature$Stage=stages
+    set.seed(1)
+    preProcValues <- preProcess(feature, method = c("center", "scale"))
+    data.ml = predict(preProcValues, feature)
+    gmm = ClusterR::GMM(data.ml, 25, dist_mode = "eucl_dist", seed_mode = "random_subset", km_iter = 10,
+          em_iter = 10, verbose = F)
+    pr = predict(gmm, newdata = data.ml)
+
+    feature$Group <- as.factor(pr)
+    data.ml$Group = as.factor(pr)
+
+    calc_sig = load("calc_sig.RData")
+    risk_class = load("risk_class.RData")
+    
+    setProgress(2/4)
+    
+    data2 <- data.table::rbindlist(lapply(1:25, calc_sig, feature))
+    feature = risk_class(feature, data2)
+    
+    feature$Before_Risk = class
+    feature$Before_Risk = as.numeric(gsub("Low-Risk", 0, gsub("Moderate-Risk", 1, gsub("High-Risk", 2, feature$Before_Risk))))
+
+    X = feature[,-c(ncol(feature), ncol(feature)-1, ncol(feature)-2)]
+    feature_data(feature)
+
+    
+    setProgress(3/4)
+    
+    fit_new = xgb.train(params = list(learning_rate = 0.1), data = xgb.DMatrix(data.matrix(X), label = feature$Risk), nrounds =65)
+    fit_pred = xgb.train(params = list(learning_rate = 0.1), data = xgb.DMatrix(data.matrix(X), label = feature$Before_Risk), 
+                         nrounds = 65)
+
+    shp_new = shapviz(fit_new, data.matrix(X), X)
+    shp_pred = shapviz(fit_pred, data.matrix(X), X)
+
+    fits$X = X
+    fits$fit_new = fit_new
+    fits$fit_pred = fit_pred
+
+    shp_plots$plot1 = sv_importance(shp_new, show_numbers=TRUE)
+    shp_plots$plot2 = sv_importance(shp_pred, show_numbers=TRUE)
+    
+    setProgress(4/4)
+  })
+
+  })
+
+  output$feature_num1 = renderPlot({
+    shp_plots$plot1
+      })
+  output$feature_num2 = renderPlot({
+    shp_plots$plot2
+      })
+  
+  output$confusion1 = renderPrint({
+    req(fits$fit_pred)
+    xgb_pred = predict(fits$fit_pred, data.matrix(fits$X))
+    xgb_pred[xgb_pred>2] = 2
+    xgb_pred = round(xgb_pred)
+
+    caret::confusionMatrix(as.factor(xgb_pred), as.factor(feature_data()$Before_Risk))
+  })
+
+  output$confusion2 = renderPrint({
+    req(fits$fit_new)
+    xgb_new = predict(fits$fit_new, data.matrix(fits$X))
+    xgb_new[xgb_new>2] = 2
+    xgb_new = round(xgb_new)
+    
+    caret::confusionMatrix(as.factor(xgb_new), as.factor(feature_data()$Risk))
+    })
+
+output$download_feature<-downloadHandler(
+    filename = function()
+    {
+      paste0("melanoma_risk_output",Sys.Date(),".csv")
+
+    },
+
+    content=function(file)
+    {
+    write.csv(feature_data(), file, row.names = TRUE)
     }
 )
     
