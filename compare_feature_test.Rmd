@@ -31,6 +31,7 @@ library(mboost)
 library(treeshap)
 library(kernelshap)
 library(doFuture)
+library(forcats)
 ```
 data_bmi is not actually adding BMI yet, it's just replacing whatever index is removed inititally
 
@@ -244,7 +245,14 @@ sv_importance(shp_new, kind = "bee")
 sv_importance(shp_pred, kind = "bee")
 
 
-
+# risk_data_new %>%
+#       mutate(MSS = if_else(MSS == 1, "Dead", "Alive")) %>%
+#       count(Group, MSS) %>%
+#       group_by(Group) %>%
+#       mutate(N = sum(n), p = 100*n/N) %>%
+#       filter(MSS == "Dead") %>%
+#       ggplot(aes(x = fct_reorder(Group, p, .desc = TRUE), y = p))+
+#       geom_col()
 
 ```
 ```{r}
