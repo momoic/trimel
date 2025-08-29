@@ -69,7 +69,7 @@ pr = predict(gmm, newdata = data.ml)
 
 data$Group <- as.factor(pr)
 data.ml$Group = as.factor(pr)
-
+logrank <- survdiff(Surv(Met_Time, Mets) ~ Sex, data = data)
 ```
 
 ```{r}
@@ -206,13 +206,30 @@ pr = predict(gmm, newdata = data_new.ml)
 
 data_new$Group <- as.factor(pr)
 data_new.ml$Group = as.factor(pr)
+
 data2_new = data.table::rbindlist(lapply(1:15,calc_sig,data_new))
+
+
+high_risk = subset(data_new, data_new$Group %in% subset(data2_new, Risk == "HR")$Cluster)
+    high_risk_clusters = (high_risk %>%
+      mutate(MSS = if_else(MSS == 1, "Dead", "Alive")) %>%
+      count(Group, MSS) %>%
+      group_by(Group) %>%
+      mutate(N = sum(n), p = 100*n/N) %>%
+      filter(MSS == "Dead") %>%
+      filter(p>25))$Group
+    
+low_risk = subset(data_new, data_new$Group %in% subset(data2_new, Risk == "LR")$Cluster)
+low_risk = subset(data_new, data_new$Group %in% subset(data2_new, Risk == "LR" & Significance == "S")$Cluster)
+
 
 risk_data_new = risk_class(data_new, data2_new)
 
 forest_pred = predict(forest_model, newdata = data_new.ml)
 data_new$Group = forest_pred
 data2_pred = data.table::rbindlist(lapply(1:15,calc_sig,data_new))
+
+
 
 risk_data_pred = risk_class(data_new, data2_pred)
 
@@ -244,7 +261,7 @@ sv_importance(shp_pred, show_numbers=TRUE)
 sv_importance(shp_new, kind = "bee")
 sv_importance(shp_pred, kind = "bee")
 
-
+    
 # risk_data_new %>%
 #       mutate(MSS = if_else(MSS == 1, "Dead", "Alive")) %>%
 #       count(Group, MSS) %>%

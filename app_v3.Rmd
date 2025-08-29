@@ -20,6 +20,7 @@ library(shinythemes)
 library(shinydashboard)
 library(shinycssloaders)
 library(dashboardthemes)
+library(forcats)
 library(DT)
 library(survminer)
 library(survival)
@@ -577,7 +578,7 @@ server <- function(input, output) {
         
         if(row$Breslow_Depth<=1.0 )
       {
-        if (row$Breslow_Depth<0.8 & row$Ulceration ==0)
+        if (row$Breslow_Depth<0.8 & row$Ulceration == 0)
         {
           tstage<-"T1a"
           cstage<-"IA"
@@ -612,20 +613,21 @@ server <- function(input, output) {
       tstage<-ifelse (row$Ulceration==0, "T4a","T4b")
       cstage<-ifelse(tstage == "T4a","IIB","IIC")
     }
+      
 
     tstages<-c(tstages,tstage)
     cstages<-c(cstages,cstage)
-    
+
 
     scaled<-predict(scale,pt_data)
-      
-      
+
+
     pred<-as.character(predict(class_model,scaled))
     class<-c(class,pred)
     }
-    
+
     incProgress(1/3)
-      
+
 
     clinpath$Risk=class
     clinpath$tstages=tstages
@@ -652,9 +654,9 @@ server <- function(input, output) {
       fit = survfit(Surv(MSS_Time, MSS) ~ Risk, clinpath)
       surv_curve(fit)
       }
-    # #pairwise_survdiff(Surv(MSS_Time, MSS) ~ combined_risk, data = clinpath, p.adjust.method = "bonferroni")
-    # 
-    
+    #pairwise_survdiff(Surv(MSS_Time, MSS) ~ combined_risk, data = clinpath, p.adjust.method = "bonferroni")
+
+
     #clinpath <- clinpath[, !grepl("^X(\\.\\d*)?$", names(clinpath))]
     clinpath_data(clinpath)
     incProgress(1/3)
@@ -784,43 +786,43 @@ server <- function(input, output) {
 
       pred<-as.character(predict(class_model,scaled))
       class<-c(class,pred)
-      if(row$Breslow_Depth<=1.0 )
-      {
-        if (row$Breslow_Depth<0.8 & row$Ulceration ==0)
-        {
-          tstage<-"T1a"
-          cstage<-"IA"
-        }
-
-        if ((row$Breslow_Depth<0.8 & row$Ulceration==1) || (row$Breslow_Depth >=0.8 & row$Breslow_Depth<=1.0))
-        {
-          tstage<-"T1b"
-          cstage<-"IB"
-        }
-
-     }
-
-     if (row$Breslow_Depth> 1.0 & row$Breslow_Depth<=2.0)
-     {
-        tstage<-ifelse (row$Ulceration==0, "T2a","T2b")
-        cstage<-ifelse(tstage == "T2a","IB","IIA")
-
-     }
-
-     if (row$Breslow_Depth >2.0 & row$Breslow_Depth<=4.0)
-     {
-       tstage<-ifelse (row$Ulceration==0, "T3a","T3b")
-       cstage<-ifelse(tstage == "T3a","IIA","IIB")
-     }
-
-
-
-
-    if (row$Breslow_Depth >4.0 )
-    {
-      tstage<-ifelse (row$Ulceration==0, "T4a","T4b")
-      cstage<-ifelse(tstage == "T4a","IIB","IIC")
-    }
+    #   if(row$Breslow_Depth<=1.0 )
+    #   {
+    #     if (row$Breslow_Depth<0.8 & row$Ulceration ==0)
+    #     {
+    #       tstage<-"T1a"
+    #       cstage<-"IA"
+    #     }
+    # 
+    #     if ((row$Breslow_Depth<0.8 & row$Ulceration==1) || (row$Breslow_Depth >=0.8 & row$Breslow_Depth<=1.0))
+    #     {
+    #       tstage<-"T1b"
+    #       cstage<-"IB"
+    #     }
+    # 
+    #  }
+    # 
+    #  if (row$Breslow_Depth> 1.0 & row$Breslow_Depth<=2.0)
+    #  {
+    #     tstage<-ifelse (row$Ulceration==0, "T2a","T2b")
+    #     cstage<-ifelse(tstage == "T2a","IB","IIA")
+    # 
+    #  }
+    # 
+    #  if (row$Breslow_Depth >2.0 & row$Breslow_Depth<=4.0)
+    #  {
+    #    tstage<-ifelse (row$Ulceration==0, "T3a","T3b")
+    #    cstage<-ifelse(tstage == "T3a","IIA","IIB")
+    #  }
+    # 
+    # 
+    # 
+    # 
+    # if (row$Breslow_Depth >4.0 )
+    # {
+    #   tstage<-ifelse (row$Ulceration==0, "T4a","T4b")
+    #   cstage<-ifelse(tstage == "T4a","IIB","IIC")
+    # }
 
     
     

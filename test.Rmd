@@ -1,0 +1,208 @@
+---
+title: "Untitled"
+output: html_document
+date: "2025-08-29"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(caret)
+library(shiny)
+library(randomForest)
+library(plotly)
+library(shinythemes)
+library(shinydashboard)
+library(shinycssloaders)
+library(dashboardthemes)
+library(DT)
+library(survminer)
+library(survival)
+library(forcats)
+library(plotly)
+library(shapviz)
+library(ClusterR)
+library(data.table)
+library(xgboost)
+library(ggplot2)
+```
+
+```{r}
+  calc_sig <- function(i, data){
+
+      data$Comparison <- NA
+      data$Comparison[data$Group != i] <- "NC"
+      data$Comparison[data$Group == i] <- "C"
+      if (length(unique(data$Comparison)) > 1){
+      logrank <- survdiff(Surv(Met_Time, Mets) ~ Comparison, data = data)
+      pval <- logrank$pvalue
+      if ((logrank$obs[[1]]/nrow(subset(data, Comparison == "C"))) > (logrank$obs[[2]]/nrow(subset(data, Comparison == "NC")))){
+        risk <- "HR"
+      }
+      if ((logrank$obs[[1]]/nrow(subset(data, Comparison == "C"))) < (logrank$obs[[2]]/nrow(subset(data, Comparison == "NC")))){
+      risk <- "LR"
+      }
+      if ((logrank$obs[[1]]/nrow(subset(data, Comparison == "C"))) == (logrank$obs[[2]]/nrow(subset(data, Comparison == "NC")))){
+      risk <- NA
+      }
+      if (pval < 0.05){
+        sig <- "S"
+      }
+      if (pval >= 0.05){
+      sig <- "NS"
+      }
+      if (logrank$obs[[1]] == 0){
+        z <- 1
+      }
+        if (logrank$obs[[1]] > 0){
+        z <- 0
+      }
+      row <- data.frame("Risk" = risk, "Significance" = sig, "Cluster" = i, "Z" = z)
+      return(row)
+      }
+    }
+    
+    risk_class = function(data, cluster_sig){
+  data$Risk = 1
+  data$Risk[data$Group %in% subset(cluster_sig, Risk == "HR" & Significance == "S")$Cluster] = 2
+  data$Risk[data$Group %in% subset(cluster_sig, Z == 1)$Cluster] = 0
+  return(data)
+    }
+    
+    scale <- readRDS("scaling_data.RData")
+    class_model <- readRDS("classification_model.RData")
+    class<-c()
+    tstages<-c()
+    cstages<-c()
+    feature = read.csv("C://PhD work//trimel//clinical_ht-wt-node.csv")
+    
+    for (i in 1:nrow(feature)){
+      row<-feature[i, ]
+      pt_data<-data.frame(
+        Age= row$Age,
+        Mitotic_Rate=row$Mitotic_Rate,
+        Breslow_Depth = row$Breslow_Depth,
+        Ulceration = row$Ulceration,
+        Sex = row$Sex,
+        FaceHeadNeck = row$FaceHeadNeck,
+        UpperLimbShoulder =row$UpperLimbShoulder,
+        LowerLimbHip = row$LowerLimbHip,
+        Trunk = row$Trunk,
+        Superficial_Spreading = row$Superficial_Spreading,
+        Nodular = row$Nodular,
+        Lentigo_Maligna = row$Lentigo_Maligna,
+        Acral_Lentiginous = row$Acral_Lentiginous,
+        Desmoplastic = row$Desmoplastic
+      )
+
+      scaled<-predict(scale,pt_data)
+
+      pred<-as.character(predict(class_model,scaled))
+      class<-c(class,pred)
+      if(row$Breslow_Depth<=1.0 )
+      {
+        if (row$Breslow_Depth<0.8 & row$Ulceration ==0)
+        {
+          tstage<-"T1a"
+          cstage<-"IA"
+        }
+
+        if ((row$Breslow_Depth<0.8 & row$Ulceration==1) || (row$Breslow_Depth >=0.8 & row$Breslow_Depth<=1.0))
+        {
+          tstage<-"T1b"
+          cstage<-"IB"
+        }
+
+     }
+
+     if (row$Breslow_Depth> 1.0 & row$Breslow_Depth<=2.0)
+     {
+        tstage<-ifelse (row$Ulceration==0, "T2a","T2b")
+        cstage<-ifelse(tstage == "T2a","IB","IIA")
+
+     }
+
+     if (row$Breslow_Depth >2.0 & row$Breslow_Depth<=4.0)
+     {
+       tstage<-ifelse (row$Ulceration==0, "T3a","T3b")
+       cstage<-ifelse(tstage == "T3a","IIA","IIB")
+     }
+
+
+
+
+    if (row$Breslow_Depth >4.0 )
+    {
+      tstage<-ifelse (row$Ulceration==0, "T4a","T4b")
+      cstage<-ifelse(tstage == "T4a","IIB","IIC")
+    }
+
+    
+    
+   
+    }
+    
+    tstages<-c(tstages,tstage)
+    cstages<-c(cstages,cstage)
+    
+    set.seed(1)
+    preProcValues <- preProcess(feature, method = c("center", "scale"))
+    data.ml = predict(preProcValues, feature)
+    anyNA(data.ml[,20])
+    gmm = ClusterR::GMM(data.ml, 25, dist_mode = "eucl_dist", seed_mode = "random_subset", km_iter = 10,
+          em_iter = 10, verbose = F)
+    pr = predict(gmm, newdata = data.ml)
+
+    feature$Group <- as.factor(pr)
+    data.ml$Group = as.factor(pr)
+
+    
+    data2 <- data.table::rbindlist(lapply(1:25, calc_sig, feature))
+    
+    #main thing to do now is rewrite the risk class function to figure out what who is considered a low risk cluster
+    high_risk = subset(feature, feature$Group %in% subset(data2, Risk == "HR")$Cluster)
+    high_risk_clusters = (high_risk %>%
+      mutate(MSS = if_else(MSS == 1, "Dead", "Alive")) %>%
+      count(Group, MSS) %>%
+      group_by(Group) %>%
+      mutate(N = sum(n), p = 100*n/N) %>%
+      filter(MSS == "Dead") %>%
+      filter(p>25))$Group
+    
+    low_risk = subset(feature, feature$Group %in% subset(data2, Risk == "LR")$Cluster)
+    low_risk = subset(feature, feature$Group %in% subset(data2, Risk == "LR" & Significance == "S")$Cluster)
+    
+    
+    
+    feature = risk_class(feature, data2)
+    
+    feature$Before_Risk = class
+    feature$Before_Risk = as.numeric(gsub("Low-Risk", 0, gsub("Moderate-Risk", 1, gsub("High-Risk", 2, feature$Before_Risk))))
+
+    X = feature[,-c(ncol(feature), ncol(feature)-1, ncol(feature)-2)]
+    feature$tstages=tstages
+    feature$cstages=cstages
+
+    
+    fit_new = xgb.train(params = list(learning_rate = 0.1), data = xgb.DMatrix(data.matrix(X), label = feature$Risk), nrounds =65)
+    fit_pred = xgb.train(params = list(learning_rate = 0.1), data = xgb.DMatrix(data.matrix(X), label = feature$Before_Risk), 
+                         nrounds = 65)
+
+    shp_new = shapviz(fit_new, data.matrix(X), X)
+    shp_pred = shapviz(fit_pred, data.matrix(X), X)
+
+
+    sv_importance(shp_new, kind = "beeswarm", show_numbers=TRUE)
+    sv_importance(shp_pred, kind = "beeswarm", show_numbers=TRUE)
+    feature %>%
+      mutate(MSS = if_else(MSS == 1, "Dead", "Alive")) %>%
+      count(Group, MSS) %>%
+      group_by(Group) %>%
+      mutate(N = sum(n), p = 100*n/N) %>%
+      filter(MSS == "Dead") %>%
+      ggplot(aes(x = fct_reorder(Group, p, .desc = TRUE), y = p))+
+      geom_col()
+    
+    
+    
+```
+
