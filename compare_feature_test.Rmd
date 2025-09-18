@@ -37,31 +37,37 @@ data_bmi is not actually adding BMI yet, it's just replacing whatever index is r
 
 it's not obvious to me that accuracy predicting cluster is that useful, we probably want accuracy predicting risk based on cluster characteristics which probably means we want to use trees to sort into clusters but then calc sig to get the risk and use xgboost to predict risk
 ```{r}
-data = read.csv("C://PhD work//Melanoma-ClinPath-Model//Datasets//roswell_final.csv")[,-1]
+data = read.csv("C://PhD work//clinpath_CT//roswell_no_added.csv")
 ```
 
 ```{r}
 preProcValues <- preProcess(data, method = c("center", "scale"))
 data.ml = predict(preProcValues, data)
 
-
 ```
 
 
 
 ```{r}
+opt_gmm = Optimal_Clusters_GMM(data.ml, max_clusters = 50, criterion = "BIC",
 
-# opt_gmm = Optimal_Clusters_GMM(data.ml, max_clusters = 50, criterion = "BIC",
-# 
-#                               dist_mode = "eucl_dist", seed_mode = "random_subset",
-# 
-#                               km_iter = 10, em_iter = 10, var_floor = 1e-10,
-# 
-#                               plot_data = T)
-# plot(1:50, opt_gmm)
+                              dist_mode = "maha_dist", seed_mode = "random_subset",
+
+                              km_iter = 5, em_iter = 100, var_floor = 1e-10,
+
+                              plot_data = F)
+plot(1:50, opt_gmm)
 
 
-gmm = GMM(data.ml, 15, dist_mode = "eucl_dist", seed_mode = "random_subset", km_iter = 10,
+diff_list = c()
+for (i in 1:(length(opt_gmm)-3)){
+  gmm_diff = (opt_gmm[i+3] - opt_gmm[i])/opt_gmm[i]
+  diff_list = c(diff_list, gmm_diff)
+}
+
+index = which(diff_list < 0.10)[[2]]
+
+gmm = GMM(data.ml, index, dist_mode = "eucl_dist", seed_mode = "random_subset", km_iter = 10,
           em_iter = 10, verbose = F)   
  
 
@@ -69,7 +75,6 @@ pr = predict(gmm, newdata = data.ml)
 
 data$Group <- as.factor(pr)
 data.ml$Group = as.factor(pr)
-logrank <- survdiff(Surv(Met_Time, Mets) ~ Sex, data = data)
 ```
 
 ```{r}
@@ -108,7 +113,7 @@ calc_sig <- function(i, data){
 }
 
 
-data2 <- data.table::rbindlist(lapply(1:15, calc_sig, data))
+data2 <- data.table::rbindlist(lapply(1:index, calc_sig, data))
 ```
 
 ```{r}
@@ -172,34 +177,99 @@ forest_model = randomForest(Group~., data = data.ml, mtry = 4, ntree = 500, samp
 ```
 
 ```{r}
+
+high_risk = subset(data, data$Group %in% subset(data2, Risk == "HR")$Cluster)
+
+data %>%
+      mutate(Mets = if_else(Mets == 1, "Dead", "Alive")) %>%
+      count(Group, Mets) %>%
+      group_by(Group) %>%
+      mutate(N = sum(n), p = 100*n/N) %>%
+      filter(Mets == "Dead") %>%
+      ggplot(aes(x = fct_reorder(Group, p, .desc = TRUE), y = p))+
+      geom_col()
+
+high_risk_clusters = (high_risk %>%
+    mutate(Mets = if_else(Mets == 1, "Dead", "Alive")) %>%
+    count(Group, Mets) %>%
+    group_by(Group) %>%
+    mutate(N = sum(n), p = 100*n/N) %>%
+    filter(Mets == "Dead") %>%
+    filter(p>25))$Group
+    
+low_risk = subset(data, data$Group %in% subset(data2, Risk == "LR")$Cluster)
+
+low_risk_clusters = (low_risk %>%
+      mutate(Mets = if_else(Mets == 1, "Dead", "Alive")) %>%
+      mutate(Breslow_Depth = ifelse(Breslow_Depth > 1, "High", "Low")) %>%
+      count(Group, Mets, Breslow_Depth) %>%
+      group_by(Group, Breslow_Depth) %>%
+      mutate(N = sum(n), p = 100*n/N) %>%
+      group_by(Group) %>%
+      summarize(ratio = p[Mets == "Alive" & Breslow_Depth == "High"]/p[Mets == "Alive" & Breslow_Depth == "Low"]) %>%
+      slice_max(ratio, n = 2))$Group
+
+```
+
+```{r}
+# risk_class = function(data, cluster_sig){
+#   data$Risk = 1
+#   data$Risk[data$Group %in% subset(cluster_sig, Risk == "HR" & Significance == "S")$Cluster] = 2
+#   data$Risk[data$Group %in% subset(cluster_sig, Z == 1)$Cluster] = 0
+#   return(data)
+# }
+
 risk_class = function(data, cluster_sig){
   data$Risk = 1
-  data$Risk[data$Group %in% subset(cluster_sig, Risk == "HR" & Significance == "S")$Cluster] = 2
-  data$Risk[data$Group %in% subset(cluster_sig, Z == 1)$Cluster] = 0
+  
+  high_risk = subset(data, data$Group %in% subset(data2, Risk == "HR")$Cluster)
+  low_risk = subset(data, data$Group %in% subset(data2, Risk == "LR")$Cluster)
+
+  low_risk_clusters = (low_risk %>%
+      mutate(Mets = if_else(Mets == 1, "Dead", "Alive")) %>%
+      mutate(Breslow_Depth = ifelse(Breslow_Depth > 1, "High", "Low")) %>%
+      count(Group, Mets, Breslow_Depth) %>%
+      group_by(Group, Breslow_Depth) %>%
+      mutate(N = sum(n), p = 100*n/N) %>%
+      group_by(Group) %>%
+      summarize(ratio = p[Mets == "Alive" & Breslow_Depth == "High"]/p[Mets == "Alive" & Breslow_Depth == "Low"]) %>%
+      slice_max(ratio, n = 2))$Group
+
+  high_risk_clusters = (high_risk %>%
+    mutate(Mets = if_else(Mets == 1, "Dead", "Alive")) %>%
+    count(Group, Mets) %>%
+    group_by(Group) %>%
+    mutate(N = sum(n), p = 100*n/N) %>%
+    filter(Mets == "Dead") %>%
+    filter(p>25))$Group
+
+  data$Risk[data$Group %in% high_risk_clusters] = 2
+  data$Risk[data$Group %in% low_risk_clusters] = 0
+  
   return(data)
 }
 ```
 
 ```{r}
-risk_data = risk_class(data, data2)
-
-X = risk_data[,-c(19,20)]
-fit = xgb.train(params = list(learning_rate = 0.1), data = xgb.DMatrix(data.matrix(X), label = risk_data$Risk), nrounds =65)
-shp = shapviz(fit, data.matrix(X), X)
-sv_importance(shp, kind = "bee")
+# risk_data = risk_class(data, data2)
+# 
+# X = risk_data[,-c(19,20)]
+# fit = xgb.train(params = list(learning_rate = 0.1), data = xgb.DMatrix(data.matrix(X), label = risk_data$Risk), nrounds =65)
+# shp = shapviz(fit, data.matrix(X), X)
+# sv_importance(shp, kind = "bee")
 
 ```
 
 adding in new dataset and running trained models on it
 ```{r}
-data_new = read.csv("C://PhD work//trimel//artificial_roswell-EOC+BCHI.csv")
+data_new = read.csv("C://PhD work//clinpath_CT//clinical_2023+2025.csv")
 data_new = data_new[,colSums(is.na(data_new)) == 0]
 
 preProcValues <- preProcess(data_new, method = c("center", "scale"))
 data_new.ml = predict(preProcValues, data_new)
 
-gmm = GMM(data_new.ml, 15, dist_mode = "eucl_dist", seed_mode = "random_subset", km_iter = 10,
-          em_iter = 10, verbose = F)   
+gmm = GMM(data_new.ml, index, dist_mode = "eucl_dist", seed_mode = "random_subset", km_iter = 5,
+          em_iter = 100, verbose = F)   
  
 
 pr = predict(gmm, newdata = data_new.ml)
@@ -209,25 +279,11 @@ data_new.ml$Group = as.factor(pr)
 
 data2_new = data.table::rbindlist(lapply(1:15,calc_sig,data_new))
 
-
-high_risk = subset(data_new, data_new$Group %in% subset(data2_new, Risk == "HR")$Cluster)
-    high_risk_clusters = (high_risk %>%
-      mutate(MSS = if_else(MSS == 1, "Dead", "Alive")) %>%
-      count(Group, MSS) %>%
-      group_by(Group) %>%
-      mutate(N = sum(n), p = 100*n/N) %>%
-      filter(MSS == "Dead") %>%
-      filter(p>25))$Group
-    
-low_risk = subset(data_new, data_new$Group %in% subset(data2_new, Risk == "LR")$Cluster)
-low_risk = subset(data_new, data_new$Group %in% subset(data2_new, Risk == "LR" & Significance == "S")$Cluster)
-
-
 risk_data_new = risk_class(data_new, data2_new)
 
 forest_pred = predict(forest_model, newdata = data_new.ml)
 data_new$Group = forest_pred
-data2_pred = data.table::rbindlist(lapply(1:15,calc_sig,data_new))
+data2_pred = data.table::rbindlist(lapply(1:index,calc_sig,data_new))
 
 
 
@@ -256,10 +312,10 @@ caret::confusionMatrix(as.factor(xgb_pred), as.factor(risk_data_pred$Risk))
 shp_new = shapviz(fit_new, data.matrix(X_new), X_new)
 shp_pred = shapviz(fit_pred, data.matrix(X_pred), X_pred)
 
-sv_importance(shp_new, show_numbers=TRUE)
 sv_importance(shp_pred, show_numbers=TRUE)
-sv_importance(shp_new, kind = "bee")
+sv_importance(shp_new, show_numbers=TRUE)
 sv_importance(shp_pred, kind = "bee")
+sv_importance(shp_new, kind = "bee")
 
     
 # risk_data_new %>%
@@ -273,13 +329,13 @@ sv_importance(shp_pred, kind = "bee")
 
 ```
 ```{r}
-unified = randomForest.unify(forest_model, data.ml)
-treeshap_res = treeshap(unified, data.ml)
-plot_contribution(treeshap_res, obs = 201)
-plot_feature_importance(treeshap_res, max_vars = 8)
-
-unified_new = randomForest.unify(forest_model, data_new.ml)
-treeshap_res_new = treeshap(unified_new, data_new.ml)
-plot_feature_importance(treeshap_res_new, max_vars = 8)
+# unified = randomForest.unify(forest_model, data.ml)
+# treeshap_res = treeshap(unified, data.ml)
+# plot_contribution(treeshap_res, obs = 201)
+# plot_feature_importance(treeshap_res, max_vars = 8)
+# 
+# unified_new = randomForest.unify(forest_model, data_new.ml)
+# treeshap_res_new = treeshap(unified_new, data_new.ml)
+# plot_feature_importance(treeshap_res_new, max_vars = 8)
 ```
 
